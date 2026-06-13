@@ -57,8 +57,9 @@ app.use(cors({
   credentials: true,
 }));
 
-// ─── Raw body capture for webhook HMAC verification ───
-// MUST be registered BEFORE express.json
+// ─── Raw body capture for webhook signature verification ───
+// MUST be registered BEFORE express.json. Used by both Shopify HMAC and
+// Stripe webhook signature checks.
 app.use('/webhooks', (req, res, next) => {
   let data = '';
   req.setEncoding('utf8');
@@ -86,6 +87,10 @@ app.get('/health', (req, res) => {
 
 // ─── Routes ───
 app.use('/', require('./routes/auth'));
+
+// Stripe webhook must be mounted BEFORE the generic /webhooks router so it
+// doesn't pick up the Shopify HMAC verification middleware applied there.
+app.use('/webhooks/stripe', require('./routes/stripeWebhook'));
 app.use('/webhooks', require('./routes/webhooks'));
 
 app.use('/api/portal', require('./routes/api/portal'));

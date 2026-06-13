@@ -132,56 +132,8 @@ class RefundService {
   }
 
   static async _processExchange(client, returnRecord) {
-    const exchangeItems = returnRecord.items.filter((item) => item.exchangeVariantId);
-
-    if (exchangeItems.length === 0) {
-      throw new Error('No exchange variants specified');
-    }
-
-    const response = await client.request(`
-      mutation draftOrderCreate($input: DraftOrderInput!) {
-        draftOrderCreate(input: $input) {
-          draftOrder {
-            id
-            name
-            totalPriceSet { shopMoney { amount } }
-          }
-          userErrors { field message }
-        }
-      }
-    `, {
-      variables: {
-        input: {
-          lineItems: exchangeItems.map((item) => ({
-            variantId: item.exchangeVariantId,
-            quantity: item.quantity,
-          })),
-          note: `Exchange for return #${returnRecord.id}`,
-          email: returnRecord.customerEmail,
-        },
-      },
-    });
-
-    const errors = response.data?.draftOrderCreate?.userErrors || [];
-    if (errors.length > 0) {
-      throw new Error(`Draft order error: ${errors.map((e) => e.message).join(', ')}`);
-    }
-
-    const draftOrder = response.data?.draftOrderCreate?.draftOrder;
-
-    for (const item of exchangeItems) {
-      await prisma.returnItem.update({
-        where: { id: item.id },
-        data: { exchangeOrderId: draftOrder?.id },
-      });
-    }
-
-    return {
-      success: true,
-      type: 'EXCHANGE',
-      draftOrderId: draftOrder?.id,
-      draftOrderName: draftOrder?.name,
-    };
+    const ExchangeService = require('./ExchangeService');
+    return ExchangeService.createExchange(returnRecord.id);
   }
 }
 

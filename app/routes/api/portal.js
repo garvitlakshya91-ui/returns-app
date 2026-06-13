@@ -9,6 +9,7 @@ const ReturnService = require('../../services/ReturnService');
 const PolicyEngine = require('../../services/PolicyEngine');
 const StorageService = require('../../services/StorageService');
 const LabelService = require('../../services/LabelService');
+const StripeService = require('../../services/StripeService');
 const logger = require('../../utils/logger');
 
 const router = Router();
@@ -274,6 +275,55 @@ router.post('/returns/:id/photos/presign', async (req, res) => {
   } catch (err) {
     logger.error({ err }, 'Presign error');
     res.status(500).json({ error: 'Failed to generate upload URL' });
+  }
+});
+
+/**
+ * POST /api/portal/returns/:id/pay
+ * Create a Stripe Checkout Session to collect the return fee.
+ * The return stays in REQUESTED until the Stripe webhook confirms payment.
+ */
+router.post('/returns/:id/pay', async (req, res) => {
+  try {
+    const returnRecord = await prisma.return.findUnique({
+      where: { id: req.params.id },
+    });
+    if (!returnRecord) return res.status(404).json({ error: 'Return not found' });
+
+    if (returnRecord.status !== 'REQUESTED') {
+      return res.status(409).json({ error: `Return is in ${returnRecord.status} status` });
+    }
+    if (!returnRecord.returnFee || Number(returnRecord.returnFee) <= 0) {
+      return res.status(400).json({ error: 'This return has no fee to collect' });
+    }
+
+    const portalBase = process.env.PORTAL_URL || process.env.HOST;
+    const successUrl = `${portalBase}/portal/return/${returnRecord.id}?paid=1`;
+    const cancelUrl = `${portalBase}/portal/return/${returnRecord.id}?paid=0`;
+
+    const session = await StripeService.createCheckoutSession({
+      returnRecord,
+      successUrl,
+      cancelUrl,
+    });
+
+    await prisma.returnEvent.create({
+      data: {
+        returnId: returnRecord.id,
+        type: 'stripe.checkout_created',
+        actor: 'customer',
+        data: {
+          sessionId: session.sessionId,
+          amountPence: session.amountPence,
+          createdAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    res.json({ url: session.url, sessionId: session.sessionId });
+  } catch (err) {
+    logger.error({ err }, 'Stripe checkout error');
+    res.status(500).json({ error: err.message || 'Failed to create checkout session' });
   }
 });
 

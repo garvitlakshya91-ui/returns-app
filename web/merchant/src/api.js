@@ -3,22 +3,26 @@ import { getSessionToken } from '@shopify/app-bridge/utilities';
 
 const API_BASE = '/api/admin';
 
-// Lazy-init App Bridge app
+// IMPORTANT: capture the App Bridge params at MODULE LOAD, not on each call.
+// The embed URL `/admin/?shop=...&host=...` gets rewritten by React Router
+// to `/` shortly after mount (via the <Navigate to="/"> catch-all), which
+// strips the query string. If getApp() reads window.location.search later,
+// it sees nothing and falls back to 'dev-token'. So we grab the values once
+// while they're still present.
+const _initialParams = new URLSearchParams(window.location.search);
+const _host = _initialParams.get('host');
+const _apiKey = import.meta.env.VITE_SHOPIFY_API_KEY || window.__SHOPIFY_API_KEY__;
+
 let appBridgeApp = null;
 function getApp() {
   if (appBridgeApp) return appBridgeApp;
-  const urlParams = new URLSearchParams(window.location.search);
-  const host = urlParams.get('host');
-  const apiKey = import.meta.env.VITE_SHOPIFY_API_KEY || window.__SHOPIFY_API_KEY__;
-
-  if (!host || !apiKey) {
-    // Running standalone (e.g. local dev) — use a fake token
+  if (!_host || !_apiKey) {
+    // Running standalone (not embedded) — backend will 401 these calls
     return null;
   }
-
   appBridgeApp = createApp({
-    apiKey,
-    host,
+    apiKey: _apiKey,
+    host: _host,
     forceRedirect: true,
   });
   return appBridgeApp;

@@ -1,49 +1,40 @@
-name = "Returns"
-handle = "returns"
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
 client_id = "56cf3e9878ee2a52551ea0921b4c6c67"
+name = "Returns"
 application_url = "https://returnflow.co.uk"
 embedded = true
-
-[access_scopes]
-scopes = "read_orders,write_orders,read_products,write_gift_cards,read_customers,read_shipping"
-
-[auth]
-redirect_urls = [
-  "https://returnflow.co.uk/auth/callback",
-]
-
-[webhooks]
-api_version = "2025-04"
-
-  # NOTE — orders/create and orders/fulfilled require Protected Customer Data
-  # Access approval (they include customer email + address). Before App Store
-  # submission: Partners → app → "Protected customer data access" → request
-  # access for "name, email, phone, address" and "orders". Once approved,
-  # uncomment the two blocks below.
-  #
-  # [[webhooks.subscriptions]]
-  # topics = ["orders/create"]
-  # uri = "https://returnflow.co.uk/webhooks/orders/create"
-  #
-  # [[webhooks.subscriptions]]
-  # topics = ["orders/fulfilled"]
-  # uri = "https://returnflow.co.uk/webhooks/orders/fulfilled"
-
-  [[webhooks.subscriptions]]
-  topics = ["app/uninstalled"]
-  uri = "https://returnflow.co.uk/webhooks/app/uninstalled"
-
-  [[webhooks.subscriptions]]
-  topics = ["shop/update"]
-  uri = "https://returnflow.co.uk/webhooks/shop/update"
-
-  [[webhooks.subscriptions]]
-  compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
-  uri = "https://returnflow.co.uk/webhooks"
-
-[pos]
-embedded = false
+handle = "returns-app"
 
 [build]
 automatically_update_urls_on_dev = true
 include_config_on_deploy = true
+
+[webhooks]
+api_version = "2026-04"
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/shop/update"
+  topics = [ "shop/update" ]
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_orders,write_orders,read_products,write_gift_cards,read_customers,read_shipping"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+[auth]
+# `automatically_update_urls_on_dev = true` in [build] adds the tunnel URL here
+# on every `shopify app dev` run; this static entry is the production callback.
+redirect_urls = [ "https://returnflow.co.uk/auth/callback" ]
+
+[pos]
+embedded = false

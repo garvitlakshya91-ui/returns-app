@@ -24,10 +24,29 @@ const PORT = process.env.PORT || 3000;
 app.set('trust proxy', 1);
 
 // ─── Security middleware ───
+// Shopify Admin embeds the app in an iframe, so X-Frame-Options:SAMEORIGIN
+// (Helmet's default via frameguard) blocks it. CSP/COEP also interfere with
+// the embed; we set our own frame-ancestors CSP below when a shop query
+// param is present.
 app.use(helmet({
-  contentSecurityPolicy: false, // Shopify Admin embedding needs this disabled
+  contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
+  frameguard: false,
 }));
+
+// Per-request frame-ancestors CSP for the embedded Admin. Scopes the allowed
+// embedders to the requesting shop + admin.shopify.com — protects against
+// clickjacking from arbitrary origins without breaking the embed.
+app.use((req, res, next) => {
+  const shop = req.query.shop;
+  if (shop && /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(String(shop))) {
+    res.setHeader(
+      'Content-Security-Policy',
+      `frame-ancestors https://${shop} https://admin.shopify.com;`,
+    );
+  }
+  next();
+});
 app.use(compression());
 app.use(pinoHttp({
   logger,

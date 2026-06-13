@@ -102,23 +102,24 @@ app.use('/api/admin/settings', require('./routes/api/settings'));
 app.use('/api/admin/billing', require('./routes/api/billing'));
 
 // ─── Static file serving for built frontends ───
-if (process.env.NODE_ENV === 'production') {
-  const portalDist = path.join(__dirname, '../web/portal/dist');
-  const merchantDist = path.join(__dirname, '../web/merchant/dist');
+// Used by both `shopify app dev` (tunnel → backend) and production. If the
+// dist directories don't exist yet, Express will just 404 — run `npm run build`
+// or the per-app `npm --prefix web/<name> run build` first.
+const portalDist = path.join(__dirname, '../web/portal/dist');
+const merchantDist = path.join(__dirname, '../web/merchant/dist');
 
-  app.use('/portal', express.static(portalDist));
-  app.use('/admin', express.static(merchantDist));
+app.use('/portal', express.static(portalDist));
+app.use('/admin', express.static(merchantDist));
 
-  // SPA fallbacks
-  app.get('/portal/*', (req, res) => res.sendFile(path.join(portalDist, 'index.html')));
-  app.get('/admin/*', (req, res) => res.sendFile(path.join(merchantDist, 'index.html')));
+// SPA fallbacks — Express 5 requires a named splat instead of '*'
+app.get('/portal/*splat', (req, res) => res.sendFile(path.join(portalDist, 'index.html')));
+app.get('/admin/*splat', (req, res) => res.sendFile(path.join(merchantDist, 'index.html')));
 
-  // Root redirect to admin when shop param present (Shopify embed)
-  app.get('/', (req, res) => {
-    if (req.query.shop) return res.redirect(`/admin?shop=${req.query.shop}&host=${req.query.host || ''}`);
-    res.redirect('/portal');
-  });
-}
+// Root: send Shopify embeds to /admin, everyone else to /portal
+app.get('/', (req, res) => {
+  if (req.query.shop) return res.redirect(`/admin?shop=${req.query.shop}&host=${req.query.host || ''}`);
+  res.redirect('/portal');
+});
 
 // ─── Register event handlers ───
 require('./events/handlers/onReturnCreated');

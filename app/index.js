@@ -128,11 +128,38 @@ const portalDist = path.join(__dirname, '../web/portal/dist');
 const merchantDist = path.join(__dirname, '../web/merchant/dist');
 
 app.use('/portal', express.static(portalDist));
-app.use('/admin', express.static(merchantDist));
+// `index: false` makes static only serve JS/CSS/assets, NOT auto-serve
+// index.html — we want all HTML responses to go through getMerchantHtml()
+// so the Shopify API key gets injected.
+app.use('/admin', express.static(merchantDist, { index: false }));
+
+// Serve the merchant SPA's index.html with the Shopify API key injected as
+// window.__SHOPIFY_API_KEY__ so App Bridge can authenticate without needing a
+// VITE_SHOPIFY_API_KEY at build time. Read once, patch on every request.
+const fs = require('fs');
+let merchantHtml = null;
+function getMerchantHtml() {
+  if (merchantHtml !== null) return merchantHtml;
+  try {
+    const raw = fs.readFileSync(path.join(merchantDist, 'index.html'), 'utf8');
+    const inject = `<script>window.__SHOPIFY_API_KEY__ = ${JSON.stringify(process.env.SHOPIFY_API_KEY || '')};</script>`;
+    merchantHtml = raw.replace('</head>', `${inject}</head>`);
+  } catch {
+    merchantHtml = ''; // dist not built yet — let Express 404 naturally
+  }
+  return merchantHtml;
+}
+
+function sendMerchantHtml(req, res) {
+  const html = getMerchantHtml();
+  if (!html) return res.status(404).send('Merchant SPA not built — run `npm run build:merchant`');
+  res.type('html').send(html);
+}
 
 // SPA fallbacks — Express 5 requires a named splat instead of '*'
 app.get('/portal/*splat', (req, res) => res.sendFile(path.join(portalDist, 'index.html')));
-app.get('/admin/*splat', (req, res) => res.sendFile(path.join(merchantDist, 'index.html')));
+app.get(['/admin', '/admin/'], sendMerchantHtml);
+app.get('/admin/*splat', sendMerchantHtml);
 
 // Root: send Shopify embeds to /admin, everyone else to /portal
 app.get('/', (req, res) => {

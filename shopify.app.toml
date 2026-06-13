@@ -1,5 +1,5 @@
-name = "ReturnFlow"
-handle = "returnflow"
+name = "Returns"
+handle = "returns"
 client_id = "56cf3e9878ee2a52551ea0921b4c6c67"
 application_url = "https://returnflow.co.uk"
 embedded = true

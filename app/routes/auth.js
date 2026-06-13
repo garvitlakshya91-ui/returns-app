@@ -17,14 +17,15 @@ router.get('/auth', async (req, res) => {
     return res.status(400).send('Missing shop parameter');
   }
 
-  // Generate the auth URL and redirect
-  const authUrl = await shopify.auth.begin({
+  // shopify-api v13 writes the redirect to res itself when given
+  // rawRequest/rawResponse — don't call res.redirect() afterwards.
+  await shopify.auth.begin({
     shop,
     callbackPath: '/auth/callback',
     isOnline: false, // Offline access token for background jobs
+    rawRequest: req,
+    rawResponse: res,
   });
-
-  res.redirect(authUrl);
 });
 
 /**

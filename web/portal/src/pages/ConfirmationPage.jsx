@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { CheckCircle, Package, MapPin, CreditCard, Loader2 } from 'lucide-react';
 import ProgressStepper from '../components/ProgressStepper';
-import { createReturn } from '../api';
+import { createReturn, createPayment } from '../api';
 
 const RESOLUTION_LABELS = {
   REFUND: 'Refund to original payment',
@@ -56,6 +56,19 @@ export default function ConfirmationPage({ data }) {
         carrier: data.carrier,
         dropoff: data.dropoff,
       });
+
+      // If the return carries a fee, route the customer through Stripe Checkout
+      // before showing the success screen. On payment, Stripe redirects them
+      // back to /return/:id?paid=1.
+      const fee = Number(returnResult.returnFee || 0);
+      if (fee > 0) {
+        const payment = await createPayment(returnResult.id);
+        if (payment?.url) {
+          window.location.href = payment.url;
+          return;
+        }
+        throw new Error('Could not start payment. Please try again.');
+      }
 
       setResult(returnResult);
       setSubmitted(true);

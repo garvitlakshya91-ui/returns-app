@@ -42,3 +42,7 @@ export function uploadPhotos(returnId, files) {
 export function getDropoffLocations(shopId, carrier, postcode) {
   return apiFetch(`/carriers/${shopId}/dropoff?carrier=${carrier}&postcode=${postcode}`);
 }
+
+export function createPayment(returnId) {
+  return apiFetch(`/returns/${returnId}/pay`, { method: 'POST' });
+}

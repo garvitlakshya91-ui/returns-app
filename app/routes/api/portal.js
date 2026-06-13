@@ -298,8 +298,8 @@ router.post('/returns/:id/pay', async (req, res) => {
     }
 
     const portalBase = process.env.PORTAL_URL || process.env.HOST;
-    const successUrl = `${portalBase}/portal/return/${returnRecord.id}?paid=1`;
-    const cancelUrl = `${portalBase}/portal/return/${returnRecord.id}?paid=0`;
+    const successUrl = `${portalBase}/return/${returnRecord.id}?paid=1`;
+    const cancelUrl = `${portalBase}/return/${returnRecord.id}?paid=0`;
 
     const session = await StripeService.createCheckoutSession({
       returnRecord,

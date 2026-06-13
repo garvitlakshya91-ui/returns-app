@@ -6,6 +6,7 @@ import ReturnReasonPage from './pages/ReturnReasonPage';
 import ResolutionPage from './pages/ResolutionPage';
 import DropoffPage from './pages/DropoffPage';
 import ConfirmationPage from './pages/ConfirmationPage';
+import ReturnStatusPage from './pages/ReturnStatusPage';
 import PortalLayout from './components/PortalLayout';
 
 export default function App() {
@@ -54,6 +55,10 @@ export default function App() {
           <Route
             path="/:shopSlug/confirmation"
             element={<ConfirmationPage data={returnData} />}
+          />
+          <Route
+            path="/return/:id"
+            element={<ReturnStatusPage />}
           />
         </Routes>
       </PortalLayout>

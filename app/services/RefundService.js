@@ -1,0 +1,188 @@
+const prisma = require('../config/database');
+const shopify = require('../config/shopify');
+const { decrypt } = require('../utils/encryption');
+const eventBus = require('../events/eventBus');
+const { REFUND_PROCESSED } = require('../events/emitters');
+const logger = require('../utils/logger');
+
+class RefundService {
+  /**
+   * Process a refund for a return via Shopify GraphQL API.
+   */
+  static async processRefund(returnId) {
+    const returnRecord = await prisma.return.findUnique({
+      where: { id: returnId },
+      include: { items: true, shop: true },
+    });
+
+    if (!returnRecord) throw new Error(`Return ${returnId} not found`);
+    if (returnRecord.status === 'PROCESSED') throw new Error('Return already processed');
+
+    const shop = returnRecord.shop;
+    const resolution = returnRecord.resolution;
+    const totalValue = Number(returnRecord.totalValue);
+    const fee = Number(returnRecord.returnFee || 0);
+    const refundAmount = totalValue - fee;
+
+    const accessToken = decrypt(shop.shopifyToken);
+    const session = { shop: shop.shopifyDomain, accessToken };
+    const client = new shopify.clients.Graphql({ session });
+
+    let result;
+    switch (resolution) {
+      case 'REFUND':
+        result = await RefundService._processOriginalRefund(client, returnRecord, refundAmount);
+        break;
+      case 'STORE_CREDIT':
+        result = await RefundService._processStoreCredit(client, returnRecord, refundAmount);
+        break;
+      case 'EXCHANGE':
+        result = await RefundService._processExchange(client, returnRecord);
+        break;
+      default:
+        throw new Error(`Unknown resolution: ${resolution}`);
+    }
+
+    await prisma.return.update({
+      where: { id: returnId },
+      data: {
+        status: 'PROCESSED',
+        refundAmount,
+        processedAt: new Date(),
+      },
+    });
+
+    eventBus.emit(REFUND_PROCESSED, { returnId, refundAmount, resolution });
+    logger.info({ returnId, resolution, refundAmount }, 'Refund processed');
+    return result;
+  }
+
+  static async _processOriginalRefund(client, returnRecord, amount) {
+    const response = await client.request(`
+      mutation refundCreate($input: RefundInput!) {
+        refundCreate(input: $input) {
+          refund {
+            id
+            totalRefundedSet { shopMoney { amount currencyCode } }
+          }
+          userErrors { field message }
+        }
+      }
+    `, {
+      variables: {
+        input: {
+          orderId: returnRecord.shopifyOrderId,
+          note: `ReturnFlow return #${returnRecord.id}`,
+          shipping: { fullRefund: false },
+          refundLineItems: returnRecord.items.map((item) => ({
+            lineItemId: item.shopifyLineItemId,
+            quantity: item.quantity,
+          })),
+        },
+      },
+    });
+
+    const errors = response.data?.refundCreate?.userErrors || [];
+    if (errors.length > 0) {
+      throw new Error(`Shopify refund error: ${errors.map((e) => e.message).join(', ')}`);
+    }
+
+    return {
+      success: true,
+      type: 'REFUND',
+      shopifyRefundId: response.data?.refundCreate?.refund?.id,
+      amount,
+    };
+  }
+
+  static async _processStoreCredit(client, returnRecord, amount) {
+    const response = await client.request(`
+      mutation giftCardCreate($input: GiftCardCreateInput!) {
+        giftCardCreate(input: $input) {
+          giftCard {
+            id
+            lastCharacters
+            balance { amount currencyCode }
+          }
+          userErrors { field message }
+        }
+      }
+    `, {
+      variables: {
+        input: {
+          initialValue: String(amount),
+          note: `Store credit for return #${returnRecord.id}`,
+        },
+      },
+    });
+
+    const errors = response.data?.giftCardCreate?.userErrors || [];
+    if (errors.length > 0) {
+      throw new Error(`Gift card error: ${errors.map((e) => e.message).join(', ')}`);
+    }
+
+    const giftCard = response.data?.giftCardCreate?.giftCard;
+    return {
+      success: true,
+      type: 'STORE_CREDIT',
+      giftCardId: giftCard?.id,
+      lastCharacters: giftCard?.lastCharacters,
+      amount,
+    };
+  }
+
+  static async _processExchange(client, returnRecord) {
+    const exchangeItems = returnRecord.items.filter((item) => item.exchangeVariantId);
+
+    if (exchangeItems.length === 0) {
+      throw new Error('No exchange variants specified');
+    }
+
+    const response = await client.request(`
+      mutation draftOrderCreate($input: DraftOrderInput!) {
+        draftOrderCreate(input: $input) {
+          draftOrder {
+            id
+            name
+            totalPriceSet { shopMoney { amount } }
+          }
+          userErrors { field message }
+        }
+      }
+    `, {
+      variables: {
+        input: {
+          lineItems: exchangeItems.map((item) => ({
+            variantId: item.exchangeVariantId,
+            quantity: item.quantity,
+          })),
+          note: `Exchange for return #${returnRecord.id}`,
+          email: returnRecord.customerEmail,
+        },
+      },
+    });
+
+    const errors = response.data?.draftOrderCreate?.userErrors || [];
+    if (errors.length > 0) {
+      throw new Error(`Draft order error: ${errors.map((e) => e.message).join(', ')}`);
+    }
+
+    const draftOrder = response.data?.draftOrderCreate?.draftOrder;
+
+    for (const item of exchangeItems) {
+      await prisma.returnItem.update({
+        where: { id: item.id },
+        data: { exchangeOrderId: draftOrder?.id },
+      });
+    }
+
+    return {
+      success: true,
+      type: 'EXCHANGE',
+      draftOrderId: draftOrder?.id,
+      draftOrderName: draftOrder?.name,
+    };
+  }
+}
+
+module.exports = RefundService;

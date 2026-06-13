@@ -1,0 +1,59 @@
+{
+  "name": "returnflow",
+  "version": "1.0.0",
+  "main": "app/index.js",
+  "scripts": {
+    "dev": "nodemon app/index.js",
+    "start": "node app/index.js",
+    "build": "npm run build:portal && npm run build:merchant",
+    "build:portal": "npm --prefix web/portal install && npm --prefix web/portal run build",
+    "build:merchant": "npm --prefix web/merchant install --legacy-peer-deps && npm --prefix web/merchant run build",
+    "postinstall": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:generate": "prisma generate",
+    "prisma:studio": "prisma studio",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "shopify",
+    "returns",
+    "ecommerce",
+    "uk"
+  ],
+  "author": "",
+  "license": "ISC",
+  "description": "ReturnFlow — UK Returns & Reverse Logistics Platform for Shopify",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1024.0",
+    "@aws-sdk/s3-request-presigner": "^3.1034.0",
+    "@prisma/client": "^6.19.3",
+    "@sentry/node": "^10.47.0",
+    "@shopify/shopify-api": "^13.0.0",
+    "@shopify/shopify-app-express": "^7.0.0",
+    "bullmq": "^5.73.0",
+    "compression": "^1.8.1",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.1",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.3.2",
+    "helmet": "^8.1.0",
+    "ioredis": "^5.10.1",
+    "multer": "^2.1.1",
+    "pino": "^10.3.1",
+    "pino-http": "^11.0.0",
+    "pino-pretty": "^13.1.3",
+    "prisma": "^6.19.3",
+    "qrcode": "^1.5.4",
+    "rate-limit-redis": "^4.3.1",
+    "resend": "^6.10.0",
+    "stripe": "^22.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  }
+}

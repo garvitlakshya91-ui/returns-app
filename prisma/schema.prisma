@@ -1,0 +1,190 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Shop {
+  id              String    @id @default(cuid())
+  shopifyDomain   String    @unique
+  shopifyToken    String    // Encrypted via aes-256-gcm
+  name            String
+  email           String
+  plan            Plan      @default(FREE)
+  currency        String    @default("GBP")
+  settings        Json      @default("{}")
+  returnCount     Int       @default(0)
+  billingCycleStart DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  returns        Return[]
+  policies       ReturnPolicy[]
+  carrierConfigs CarrierConfig[]
+  analytics      AnalyticsSnapshot[]
+}
+
+enum Plan {
+  FREE
+  STARTER
+  GROWTH
+  PRO
+}
+
+model ReturnPolicy {
+  id          String   @id @default(cuid())
+  shopId      String
+  shop        Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  name        String
+  windowDays  Int      @default(30)
+  conditions  Json     // { productTags: [], collections: [], minPrice: null, maxPrice: null }
+  resolutions Json     // { allowRefund: true, allowStoreCredit: true, allowExchange: false }
+  fees        Json?    // { changedMind: 2.50, doesntFit: 0, damaged: 0 }
+  isDefault   Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([shopId])
+}
+
+model Return {
+  id               String       @id @default(cuid())
+  shopId           String
+  shop             Shop         @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  shopifyOrderId   String
+  shopifyOrderName String
+  customerEmail    String
+  customerName     String
+  status           ReturnStatus @default(REQUESTED)
+  resolution       Resolution?
+  totalValue       Decimal      @db.Decimal(10, 2)
+  currency         String       @default("GBP")
+  returnFee        Decimal?     @db.Decimal(10, 2)
+  refundAmount     Decimal?     @db.Decimal(10, 2)
+  notes            String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  processedAt      DateTime?
+
+  items  ReturnItem[]
+  label  ReturnLabel?
+  events ReturnEvent[]
+
+  @@index([shopId, status])
+  @@index([shopId, createdAt])
+  @@index([customerEmail])
+}
+
+enum ReturnStatus {
+  REQUESTED
+  APPROVED
+  LABEL_SENT
+  IN_TRANSIT
+  RECEIVED
+  INSPECTING
+  PROCESSED
+  REJECTED
+  CANCELLED
+}
+
+enum Resolution {
+  REFUND
+  STORE_CREDIT
+  EXCHANGE
+  KEEP_ITEM
+}
+
+model ReturnItem {
+  id                String         @id @default(cuid())
+  returnId          String
+  return            Return         @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  shopifyLineItemId String
+  shopifyProductId  String
+  shopifyVariantId  String?
+  productTitle      String
+  variantTitle      String?
+  sku               String?
+  quantity          Int
+  unitPrice         Decimal        @db.Decimal(10, 2)
+  reason            String
+  reasonDetail      String?
+  photoUrls         String[]
+  condition         ItemCondition?
+  disposition       Disposition?
+  exchangeVariantId String?
+  exchangeOrderId   String?
+
+  @@index([returnId])
+}
+
+enum ItemCondition {
+  NEW
+  LIKE_NEW
+  GOOD
+  FAIR
+  DAMAGED
+  UNSELLABLE
+}
+
+enum Disposition {
+  RESTOCK
+  DISCOUNT
+  RESELL
+  DONATE
+  DISPOSE
+}
+
+model ReturnLabel {
+  id           String   @id @default(cuid())
+  returnId     String   @unique
+  return       Return   @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  carrier      String
+  trackingCode String?
+  labelUrl     String?
+  qrCodeUrl    String?
+  dropoffType  String?
+  cost         Decimal? @db.Decimal(10, 2)
+  status       String   @default("created")
+  createdAt    DateTime @default(now())
+}
+
+model CarrierConfig {
+  id          String  @id @default(cuid())
+  shopId      String
+  shop        Shop    @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  carrier     String
+  credentials Json
+  isActive    Boolean @default(true)
+  settings    Json?
+
+  @@unique([shopId, carrier])
+}
+
+model ReturnEvent {
+  id        String   @id @default(cuid())
+  returnId  String
+  return    Return   @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  type      String
+  actor     String
+  data      Json?
+  createdAt DateTime @default(now())
+
+  @@index([returnId, createdAt])
+}
+
+model AnalyticsSnapshot {
+  id         String   @id @default(cuid())
+  shopId     String
+  shop       Shop     @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  period     String
+  periodType String
+  metrics    Json
+  createdAt  DateTime @default(now())
+
+  @@unique([shopId, period, periodType])
+}

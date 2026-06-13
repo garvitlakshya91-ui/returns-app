@@ -6,6 +6,7 @@ import {
   OrderIcon,
   SettingsIcon,
   ChartVerticalIcon,
+  NoteIcon,
 } from '@shopify/polaris-icons';
 
 export default function AppFrame({ children }) {
@@ -42,8 +43,14 @@ export default function AppFrame({ children }) {
             selected: location.pathname.startsWith('/returns'),
           },
           {
-            label: 'Policies',
+            label: 'Analytics',
             icon: ChartVerticalIcon,
+            onClick: () => navigate('/analytics'),
+            selected: location.pathname === '/analytics',
+          },
+          {
+            label: 'Policies',
+            icon: NoteIcon,
             onClick: () => navigate('/policies'),
             selected: location.pathname === '/policies',
           },

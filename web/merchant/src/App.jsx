@@ -7,6 +7,7 @@ import AppFrame from './components/AppFrame';
 import DashboardPage from './pages/DashboardPage';
 import ReturnsListPage from './pages/ReturnsListPage';
 import ReturnDetailPage from './pages/ReturnDetailPage';
+import AnalyticsPage from './pages/AnalyticsPage';
 import PoliciesPage from './pages/PoliciesPage';
 import SettingsPage from './pages/SettingsPage';
 
@@ -19,6 +20,7 @@ export default function App() {
             <Route path="/" element={<DashboardPage />} />
             <Route path="/returns" element={<ReturnsListPage />} />
             <Route path="/returns/:id" element={<ReturnDetailPage />} />
+            <Route path="/analytics" element={<AnalyticsPage />} />
             <Route path="/policies" element={<PoliciesPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />

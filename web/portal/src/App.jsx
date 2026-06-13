@@ -29,7 +29,10 @@ export default function App() {
   }
 
   return (
-    <BrowserRouter>
+    // basename="/portal" because Express serves this SPA at /portal/* — without it,
+    // the router would try to match the full path including the prefix and never
+    // hit any of the routes below.
+    <BrowserRouter basename="/portal">
       <PortalLayout shopName={returnData.shopName}>
         <Routes>
           <Route

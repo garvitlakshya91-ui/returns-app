@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const multer = require('multer');
 const { portalLimiter, lookupLimiter } = require('../../middleware/rateLimiter');
+const { planGate, loadShopFromBody, PLAN_LIMITS } = require('../../middleware/planGating');
 const prisma = require('../../config/database');
 const shopify = require('../../config/shopify');
 const { decrypt } = require('../../utils/encryption');
@@ -130,22 +131,27 @@ router.post('/lookup', lookupLimiter, async (req, res) => {
 
 /**
  * POST /api/portal/returns
+ * loadShopFromBody populates req.shop from body.shopId.
+ * planGate('createReturn') enforces the per-plan monthly return limit.
+ * Exchange resolution is then gated against the shop's plan inline.
  */
-router.post('/returns', async (req, res) => {
+router.post('/returns', loadShopFromBody, planGate('createReturn'), async (req, res) => {
   try {
     const { shopId, items, resolution, customerEmail } = req.body;
 
-    if (!shopId || !items?.length || !resolution) {
-      return res.status(400).json({ error: 'shopId, items, and resolution are required' });
+    if (!items?.length || !resolution) {
+      return res.status(400).json({ error: 'items and resolution are required' });
     }
 
-    const shop = await prisma.shop.findUnique({ where: { id: shopId } });
-    if (!shop) return res.status(404).json({ error: 'Shop not found' });
-
-    const { PLAN_LIMITS } = require('../../middleware/planGating');
-    const limits = PLAN_LIMITS[shop.plan] || PLAN_LIMITS.FREE;
-    if (shop.returnCount >= limits.returnsPerMonth) {
-      return res.status(403).json({ error: 'This shop has reached its monthly return limit.' });
+    if (resolution === 'EXCHANGE') {
+      const limits = PLAN_LIMITS[req.shop.plan] || PLAN_LIMITS.FREE;
+      if (!limits.exchanges) {
+        return res.status(403).json({
+          error: 'Exchanges require Starter plan or higher',
+          plan: req.shop.plan,
+          upgradeRequired: true,
+        });
+      }
     }
 
     const returnRecord = await ReturnService.createReturn({

@@ -1,10 +1,12 @@
 const { Router } = require('express');
 const { verifyShopifySession } = require('../../middleware/auth');
+const { planGate } = require('../../middleware/planGating');
 const AnalyticsService = require('../../services/AnalyticsService');
 const logger = require('../../utils/logger');
 
 const router = Router();
 router.use(verifyShopifySession);
+router.use(planGate('analytics'));
 
 /**
  * GET /api/admin/analytics/summary

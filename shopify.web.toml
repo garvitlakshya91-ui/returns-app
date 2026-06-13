@@ -1,0 +1,10 @@
+# Shopify CLI web-component config. Required by `shopify app dev` so it knows
+# how to start the backend that serves the embedded SPA + API + webhooks.
+# Lives next to package.json; the CLI scans for these recursively.
+
+name = "returnflow-backend"
+roles = ["backend", "frontend"]
+webhooks_path = "/webhooks"
+
+[commands]
+dev = "npm run dev"

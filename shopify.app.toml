@@ -15,13 +15,19 @@ redirect_urls = [
 [webhooks]
 api_version = "2025-04"
 
-  [[webhooks.subscriptions]]
-  topics = ["orders/create"]
-  uri = "https://returnflow.co.uk/webhooks/orders/create"
-
-  [[webhooks.subscriptions]]
-  topics = ["orders/fulfilled"]
-  uri = "https://returnflow.co.uk/webhooks/orders/fulfilled"
+  # NOTE — orders/create and orders/fulfilled require Protected Customer Data
+  # Access approval (they include customer email + address). Before App Store
+  # submission: Partners → app → "Protected customer data access" → request
+  # access for "name, email, phone, address" and "orders". Once approved,
+  # uncomment the two blocks below.
+  #
+  # [[webhooks.subscriptions]]
+  # topics = ["orders/create"]
+  # uri = "https://returnflow.co.uk/webhooks/orders/create"
+  #
+  # [[webhooks.subscriptions]]
+  # topics = ["orders/fulfilled"]
+  # uri = "https://returnflow.co.uk/webhooks/orders/fulfilled"
 
   [[webhooks.subscriptions]]
   topics = ["app/uninstalled"]

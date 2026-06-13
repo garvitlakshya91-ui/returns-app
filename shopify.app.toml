@@ -41,3 +41,12 @@ embedded = false
 [build]
 automatically_update_urls_on_dev = true
 include_config_on_deploy = true
+
+# Tells the Shopify CLI how to start the dev server. The backend serves both
+# the embedded merchant SPA (/admin) and the customer portal (/portal) once
+# you've run `npm run build`. For pure-backend dev you can skip the build —
+# only the API routes need to be reachable for OAuth + webhooks to work.
+[[web]]
+roles = ["backend", "frontend"]
+command = "npm run dev"
+port = 3003

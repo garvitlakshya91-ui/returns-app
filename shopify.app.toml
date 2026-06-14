@@ -2,7 +2,7 @@
 
 client_id = "56cf3e9878ee2a52551ea0921b4c6c67"
 name = "Returns"
-application_url = "https://returnflow.co.uk"
+application_url = "https://web-production-47c44.up.railway.app"
 embedded = true
 handle = "returns-app-garvit-20260613"
 
@@ -34,7 +34,7 @@ use_legacy_install_flow = false
 [auth]
 # `automatically_update_urls_on_dev = true` in [build] adds the tunnel URL here
 # on every `shopify app dev` run; this static entry is the production callback.
-redirect_urls = [ "https://returnflow.co.uk/auth/callback" ]
+redirect_urls = [ "https://web-production-47c44.up.railway.app/auth/callback" ]
 
 [pos]
 embedded = false

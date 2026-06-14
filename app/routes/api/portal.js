@@ -1,6 +1,6 @@
 const { Router } = require('express');
 const multer = require('multer');
-const { portalLimiter, lookupLimiter } = require('../../middleware/rateLimiter');
+const { portalLimiter, lookupLimiter, createReturnLimiter } = require('../../middleware/rateLimiter');
 const { planGate, loadShopFromBody, PLAN_LIMITS } = require('../../middleware/planGating');
 const prisma = require('../../config/database');
 const shopify = require('../../config/shopify');
@@ -136,7 +136,7 @@ router.post('/lookup', lookupLimiter, async (req, res) => {
  * planGate('createReturn') enforces the per-plan monthly return limit.
  * Exchange resolution is then gated against the shop's plan inline.
  */
-router.post('/returns', loadShopFromBody, planGate('createReturn'), async (req, res) => {
+router.post('/returns', createReturnLimiter, loadShopFromBody, planGate('createReturn'), async (req, res) => {
   try {
     const { shopId, items, resolution, customerEmail } = req.body;
 

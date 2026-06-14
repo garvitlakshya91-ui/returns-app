@@ -47,15 +47,36 @@ app.use(helmet({
   frameguard: false,
 }));
 
-// Per-request frame-ancestors CSP for the embedded Admin. Scopes the allowed
-// embedders to the requesting shop + admin.shopify.com — protects against
-// clickjacking from arbitrary origins without breaking the embed.
+// Per-request CSP:
+//  - /admin (Shopify embed): scope frame-ancestors to the requesting shop +
+//    admin.shopify.com so the embed works but no other origin can frame us.
+//  - /portal and everywhere else: deny framing entirely, lock script-src to
+//    self + the R2 public host (for hosted QR images / labels), restrict
+//    img-src to self, data:, and R2. This shuts clickjacking + script
+//    injection paths on the public customer portal.
+const R2_PUBLIC = process.env.R2_PUBLIC_URL || '';
 app.use((req, res, next) => {
   const shop = req.query.shop;
   if (shop && /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(String(shop))) {
     res.setHeader(
       'Content-Security-Policy',
       `frame-ancestors https://${shop} https://admin.shopify.com;`,
+    );
+  } else if (req.path.startsWith('/portal') || req.path === '/') {
+    const imgSrc = ["'self'", 'data:', 'blob:', 'https://cdn.shopify.com', R2_PUBLIC].filter(Boolean).join(' ');
+    res.setHeader(
+      'Content-Security-Policy',
+      [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'", // Tailwind injects inline styles
+        `img-src ${imgSrc}`,
+        "connect-src 'self'",
+        "font-src 'self' data:",
+        "frame-ancestors 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+      ].join('; '),
     );
   }
   next();
@@ -176,7 +197,9 @@ app.use('/webhooks', require('./routes/webhooks'));
 // /admin SPA fallback so the queue UI takes precedence over the React router.
 app.use('/admin/queues', require('./routes/queuesDashboard')());
 
+const { adminLimiter } = require('./middleware/rateLimiter');
 app.use('/api/portal', require('./routes/api/portal'));
+app.use('/api/admin', adminLimiter);
 app.use('/api/admin/returns', require('./routes/api/returns'));
 app.use('/api/admin/analytics', require('./routes/api/analytics'));
 app.use('/api/admin/policies', require('./routes/api/policies'));

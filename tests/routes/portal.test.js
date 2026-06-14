@@ -15,6 +15,8 @@ beforeEach(() => {
   jest.doMock('../../app/middleware/rateLimiter', () => ({
     portalLimiter: (req, res, next) => next(),
     lookupLimiter: (req, res, next) => next(),
+    createReturnLimiter: (req, res, next) => next(),
+    adminLimiter: (req, res, next) => next(),
   }));
 
   prisma = installPrismaMock();

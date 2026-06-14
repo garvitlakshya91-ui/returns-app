@@ -46,13 +46,12 @@ const worker = createWorker(QUEUE_NAMES.SEND_EMAIL, async (job) => {
     if (process.env.RESEND_API_KEY) {
       const { Resend } = require('resend');
       const resend = new Resend(process.env.RESEND_API_KEY);
-      await resend.emails.send({
-        from: 'ReturnFlow <returns@returnflow.co.uk>',
-        to,
-        subject,
-        html,
-      });
-      logger.info({ to, subject, template }, 'Email sent via Resend');
+      // Use RESEND_FROM env var so the address can change without touching
+      // code when a real domain is verified. Falls back to Resend's free
+      // testing address so unconfigured deployments still work in dev.
+      const from = process.env.RESEND_FROM || 'ReturnFlow <onboarding@resend.dev>';
+      await resend.emails.send({ from, to, subject, html });
+      logger.info({ to, subject, template, from }, 'Email sent via Resend');
     } else {
       logger.info({ to, subject, template }, '[Email] dev mode — no RESEND_API_KEY, skipping send');
     }

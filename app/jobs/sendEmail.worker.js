@@ -1,7 +1,15 @@
 // Register esbuild's runtime JSX transform so we can require the
 // React Email components in emails/*.jsx directly from CommonJS.
 // Must run before any `require()` of a .jsx file in this process.
-require('esbuild-register/dist/node').register({ extensions: ['.jsx'] });
+//
+// `jsx: 'automatic'` uses the modern react/jsx-runtime — the templates
+// don't have to `import React`. The classic transform would emit
+// React.createElement(...) calls referencing a `React` that isn't in
+// scope, producing "React is not defined" at render time.
+require('esbuild-register/dist/node').register({
+  extensions: ['.jsx'],
+  jsx: 'automatic',
+});
 
 const React = require('react');
 const path = require('path');

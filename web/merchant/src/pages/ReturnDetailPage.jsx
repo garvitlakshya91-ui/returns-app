@@ -221,6 +221,36 @@ export default function ReturnDetailPage() {
                   <List.Item>Tracking: {ret.label.trackingCode || '—'}</List.Item>
                   <List.Item>Status: {ret.label.status}</List.Item>
                 </List>
+
+                {ret.label.qrCodeUrl && (
+                  <BlockStack gap="200">
+                    <Text variant="bodySm" tone="subdued">QR code (show at drop-off)</Text>
+                    <Box
+                      borderWidth="025"
+                      borderColor="border"
+                      borderRadius="200"
+                      padding="200"
+                      background="bg-surface-secondary"
+                    >
+                      <img
+                        src={ret.label.qrCodeUrl}
+                        alt="Return QR code"
+                        style={{ width: '100%', maxWidth: 240, display: 'block', margin: '0 auto' }}
+                      />
+                    </Box>
+                  </BlockStack>
+                )}
+
+                {ret.label.labelUrl && (
+                  <Button
+                    url={ret.label.labelUrl}
+                    target="_blank"
+                    variant="primary"
+                    fullWidth
+                  >
+                    Download label PDF
+                  </Button>
+                )}
               </BlockStack>
             </Card>
           </Layout.Section>

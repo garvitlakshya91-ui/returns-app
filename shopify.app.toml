@@ -7,8 +7,10 @@ embedded = true
 handle = "returns-app-garvit-20260613"
 
 [build]
-automatically_update_urls_on_dev = true
-include_config_on_deploy = true
+# Set to true while iterating on `shopify app dev` (auto-updates URLs to the
+# tunnel), set back to false before running `shopify app deploy` for prod
+# so the tunnel URL doesn't accidentally become the production app URL.
+automatically_update_urls_on_dev = false
 
 [webhooks]
 api_version = "2026-04"

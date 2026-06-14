@@ -3,6 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const path = require('path');
+const crypto = require('crypto');
 const cookieParser = require('cookie-parser');
 const helmet = require('helmet');
 const cors = require('cors');
@@ -12,9 +13,21 @@ const pinoHttp = require('pino-http');
 const logger = require('./utils/logger');
 
 // ─── Sentry ───
+// Must be initialized BEFORE express() so SDK can patch http to capture
+// request spans. No-op when SENTRY_DSN is unset.
+let Sentry = null;
 if (process.env.SENTRY_DSN) {
-  const Sentry = require('@sentry/node');
-  Sentry.init({ dsn: process.env.SENTRY_DSN, environment: process.env.NODE_ENV });
+  Sentry = require('@sentry/node');
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'development',
+    tracesSampleRate: 0.1,
+    integrations: [
+      Sentry.httpIntegration(),
+      Sentry.expressIntegration(),
+    ],
+  });
+  logger.info('Sentry initialized');
 }
 
 const app = express();
@@ -50,8 +63,19 @@ app.use((req, res, next) => {
 app.use(compression());
 app.use(pinoHttp({
   logger,
+  // Per-request UUID — propagated to every log line tied to the request and
+  // returned in the X-Request-Id response header for client-side tracing.
+  // Honors an inbound X-Request-Id so callers can correlate across services.
+  genReqId: (req, res) => {
+    const incoming = req.headers['x-request-id'];
+    const id = (incoming && /^[a-zA-Z0-9-]{1,128}$/.test(incoming))
+      ? incoming
+      : crypto.randomUUID();
+    res.setHeader('X-Request-Id', id);
+    return id;
+  },
   serializers: {
-    req: (req) => ({ method: req.method, url: req.url }),
+    req: (req) => ({ id: req.id, method: req.method, url: req.url }),
     res: (res) => ({ statusCode: res.statusCode }),
   },
   autoLogging: {
@@ -100,8 +124,44 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 
 // ─── Health check ───
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', app: 'ReturnFlow', version: '1.0.0', env: process.env.NODE_ENV });
+// Deep check used by Railway/Cloudflare uptime monitors. Returns 503 if
+// any required dependency (DB, Redis) is unreachable so the platform stops
+// routing traffic to a half-broken instance.
+app.get('/health', async (req, res) => {
+  const checks = { app: 'ok', db: 'unknown', redis: 'unknown' };
+  let status = 200;
+
+  try {
+    const prisma = require('./config/database');
+    await prisma.$queryRaw`SELECT 1`;
+    checks.db = 'ok';
+  } catch (err) {
+    checks.db = `error: ${err.message}`;
+    status = 503;
+  }
+
+  if (process.env.REDIS_URL) {
+    try {
+      const { getRedis } = require('./config/redis');
+      const redis = getRedis();
+      await redis.ping();
+      checks.redis = 'ok';
+    } catch (err) {
+      checks.redis = `error: ${err.message}`;
+      status = 503;
+    }
+  } else {
+    checks.redis = 'not_configured';
+  }
+
+  res.status(status).json({
+    status: status === 200 ? 'ok' : 'degraded',
+    app: 'ReturnFlow',
+    version: '1.0.0',
+    env: process.env.NODE_ENV,
+    checks,
+    uptimeSeconds: Math.round(process.uptime()),
+  });
 });
 
 // ─── Routes ───
@@ -191,12 +251,18 @@ if (process.env.REDIS_URL) {
 
 // ─── Error handler ───
 app.use((err, req, res, next) => {
-  logger.error({ err }, 'Unhandled error');
-  if (process.env.SENTRY_DSN) {
-    const Sentry = require('@sentry/node');
-    Sentry.captureException(err);
+  logger.error({ err, reqId: req.id }, 'Unhandled error');
+  if (Sentry) {
+    Sentry.withScope((scope) => {
+      scope.setTag('requestId', req.id);
+      scope.setTag('route', req.path);
+      Sentry.captureException(err);
+    });
   }
-  res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
+  res.status(err.status || 500).json({
+    error: err.message || 'Internal server error',
+    requestId: req.id,
+  });
 });
 
 // ─── Start server ───

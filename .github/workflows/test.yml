@@ -1,0 +1,57 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  jest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install backend deps
+        run: npm ci
+      - name: Validate Prisma schema
+        run: npx prisma validate
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Run jest suite
+        run: npm test
+
+  build-merchant:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/merchant/package-lock.json
+      - name: Install merchant deps
+        run: npm install --legacy-peer-deps
+        working-directory: web/merchant
+      - name: Build merchant SPA
+        run: npm run build
+        working-directory: web/merchant
+
+  build-portal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/portal/package-lock.json
+      - name: Install portal deps
+        run: npm install
+        working-directory: web/portal
+      - name: Build portal SPA
+        run: npm run build
+        working-directory: web/portal

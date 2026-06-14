@@ -48,18 +48,36 @@ class LabelService {
         dimensions: { length: 30, width: 20, height: 10 },
       });
 
-      // Generate QR code
+      // Generate QR code. We render as a PNG buffer and upload to R2 so the
+      // QR shows up in email clients — Gmail/Outlook strip data: URL images.
+      // If R2 isn't configured, fall back to a data URL (works in the
+      // merchant admin embed and in browsers, just not in most email clients).
       const qrData = JSON.stringify({
         tracking: labelResult.trackingCode,
         carrier: adapter.carrierName,
         returnId,
         shop: shop.shopifyDomain,
       });
-      const qrCodeDataUrl = await QRCode.toDataURL(qrData, {
-        width: 300,
-        margin: 2,
-        color: { dark: '#000000', light: '#ffffff' },
-      });
+      let qrCodeUrl;
+      if (process.env.R2_ACCOUNT_ID) {
+        const buffer = await QRCode.toBuffer(qrData, {
+          width: 300,
+          margin: 2,
+          color: { dark: '#000000', light: '#ffffff' },
+        });
+        const { url } = await StorageService.upload(
+          buffer,
+          'image/png',
+          `returns/${returnId}/qr`,
+        );
+        qrCodeUrl = url;
+      } else {
+        qrCodeUrl = await QRCode.toDataURL(qrData, {
+          width: 300,
+          margin: 2,
+          color: { dark: '#000000', light: '#ffffff' },
+        });
+      }
 
       // If carrier returned a label URL, re-host on R2 for reliability
       let labelUrl = labelResult.labelUrl;
@@ -82,7 +100,7 @@ class LabelService {
           carrier: adapter.carrierName,
           trackingCode: labelResult.trackingCode,
           labelUrl,
-          qrCodeUrl: qrCodeDataUrl,
+          qrCodeUrl,
           dropoffType: 'ParcelShop',
           cost: labelResult.cost,
           status: 'created',

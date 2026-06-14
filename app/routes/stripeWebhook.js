@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const prisma = require('../config/database');
 const StripeService = require('../services/StripeService');
+const { claim } = require('../utils/idempotency');
 const eventBus = require('../events/eventBus');
 const { RETURN_APPROVED } = require('../events/emitters');
 const logger = require('../utils/logger');
@@ -37,6 +38,14 @@ router.post('/', async (req, res) => {
 
   // ACK Stripe immediately, process async
   res.status(200).json({ received: true });
+
+  // Idempotency — Stripe retries webhooks on non-2xx and during their
+  // periodic redelivery. event.id is stable per logical event.
+  const isFirstTime = await claim(`stripe:${event.id}`);
+  if (!isFirstTime) {
+    logger.info({ eventId: event.id, type: event.type }, 'Stripe webhook duplicate — skipping');
+    return;
+  }
 
   try {
     switch (event.type) {

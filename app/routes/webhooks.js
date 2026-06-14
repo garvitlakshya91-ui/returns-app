@@ -1,5 +1,6 @@
 const { Router } = require('express');
 const { verifyWebhookHmac } = require('../utils/hmac');
+const { claim } = require('../utils/idempotency');
 const prisma = require('../config/database');
 const eventBus = require('../events/eventBus');
 const { SHOP_UNINSTALLED } = require('../events/emitters');
@@ -28,6 +29,19 @@ function webhookVerification(req, res, next) {
 }
 
 router.use(webhookVerification);
+
+// Idempotency — Shopify retries webhooks aggressively on non-2xx responses
+// AND occasionally double-delivers in production. Without dedup we'd re-emit
+// events and double-update state. X-Shopify-Webhook-Id is stable per delivery.
+router.use(async (req, res, next) => {
+  const webhookId = req.headers['x-shopify-webhook-id'];
+  const isFirstTime = await claim(`shopify:${webhookId}`);
+  if (!isFirstTime) {
+    logger.info({ webhookId, path: req.path }, 'Shopify webhook duplicate — skipping');
+    return res.status(200).send('OK (duplicate)');
+  }
+  next();
+});
 
 // ─── Order sync ───
 

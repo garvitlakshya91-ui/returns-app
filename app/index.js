@@ -172,6 +172,10 @@ app.use('/', require('./routes/auth'));
 app.use('/webhooks/stripe', require('./routes/stripeWebhook'));
 app.use('/webhooks', require('./routes/webhooks'));
 
+// BullMQ admin dashboard — gated by basic auth from env. Mounted BEFORE the
+// /admin SPA fallback so the queue UI takes precedence over the React router.
+app.use('/admin/queues', require('./routes/queuesDashboard')());
+
 app.use('/api/portal', require('./routes/api/portal'));
 app.use('/api/admin/returns', require('./routes/api/returns'));
 app.use('/api/admin/analytics', require('./routes/api/analytics'));

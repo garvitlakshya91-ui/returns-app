@@ -11,6 +11,10 @@ handle = "returns-app-garvit-20260613"
 # tunnel), set back to false before running `shopify app deploy` for prod
 # so the tunnel URL doesn't accidentally become the production app URL.
 automatically_update_urls_on_dev = false
+# REQUIRED for `shopify app deploy` to actually push URL/scope changes from
+# this toml to the Partners-side app config. Without this, deploy only ships
+# built extensions and silently keeps the previous URLs.
+include_config_on_deploy = true
 
 [webhooks]
 api_version = "2026-04"

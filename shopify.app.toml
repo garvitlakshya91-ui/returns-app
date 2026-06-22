@@ -2,7 +2,7 @@
 
 client_id = "56cf3e9878ee2a52551ea0921b4c6c67"
 name = "Returns"
-application_url = "https://web-production-47c44.up.railway.app"
+application_url = "https://app.returnsflow.uk"
 embedded = true
 handle = "returns-app-garvit-20260613"
 
@@ -11,9 +11,8 @@ handle = "returns-app-garvit-20260613"
 # tunnel), set back to false before running `shopify app deploy` for prod
 # so the tunnel URL doesn't accidentally become the production app URL.
 automatically_update_urls_on_dev = false
-# REQUIRED for `shopify app deploy` to actually push URL/scope changes from
-# this toml to the Partners-side app config. Without this, deploy only ships
-# built extensions and silently keeps the previous URLs.
+# REQUIRED for `shopify app deploy` to push application_url + redirect_urls.
+# Without this, deploy only ships extensions and silently keeps old URLs.
 include_config_on_deploy = true
 
 [webhooks]
@@ -40,7 +39,7 @@ use_legacy_install_flow = false
 [auth]
 # `automatically_update_urls_on_dev = true` in [build] adds the tunnel URL here
 # on every `shopify app dev` run; this static entry is the production callback.
-redirect_urls = [ "https://web-production-47c44.up.railway.app/auth/callback" ]
+redirect_urls = [ "https://app.returnsflow.uk/auth/callback" ]
 
 [pos]
 embedded = false

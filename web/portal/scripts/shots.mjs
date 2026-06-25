@@ -17,8 +17,8 @@ const SLUG = 'demoshop';
 mkdirSync(OUT, { recursive: true });
 mkdirSync(VIDEO_DIR, { recursive: true });
 
-// Phone-ish portrait, retina scale for crisp output.
-const VIEWPORT = { width: 440, height: 956 };
+// App Store standard: 1600x900 landscape, exact pixels (scale factor 1).
+const VIEWPORT = { width: 1600, height: 900 };
 
 const STEPS = [
   { name: '1-lookup',        path: `/portal/${SLUG}?demo=1` },
@@ -34,8 +34,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const browser = await chromium.launch();
 const context = await browser.newContext({
   viewport: VIEWPORT,
-  deviceScaleFactor: 2,
-  recordVideo: { dir: VIDEO_DIR, size: VIEWPORT },
+  deviceScaleFactor: 1, // exact 1600x900 output
 });
 const page = await context.newPage();
 

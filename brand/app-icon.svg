@@ -10,11 +10,12 @@
     </linearGradient>
   </defs>
 
-  <!-- Rounded-square background (App Store-safe corner radius ~22%) -->
-  <rect width="1200" height="1200" rx="264" fill="url(#bg)"/>
+  <!-- Full-bleed background. Shopify applies its own rounded-corner mask,
+       so the icon should fill the entire square edge to edge. -->
+  <rect width="1200" height="1200" fill="url(#bg)"/>
 
   <!-- Subtle top light -->
-  <rect width="1200" height="1200" rx="264" fill="white" opacity="0.06"/>
+  <rect width="1200" height="1200" fill="white" opacity="0.06"/>
 
   <!-- Circular "return" arrow encircling the package -->
   <g stroke="#FFFFFF" stroke-width="48" stroke-linecap="round" fill="none" opacity="0.95">

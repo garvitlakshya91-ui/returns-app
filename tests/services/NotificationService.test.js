@@ -76,12 +76,33 @@ describe('NotificationService named-template helpers', () => {
 });
 
 describe('NotificationService — queue unavailable', () => {
-  it('returns null and does not throw when queue is unavailable', async () => {
+  it('falls back to direct send (never throws) when queue is unavailable', async () => {
     jest.resetModules();
     jest.doMock('../../app/jobs/queue', () => ({
       QUEUE_NAMES: { SEND_EMAIL: 'send-email' },
       getQueue: () => null,
     }));
+    // Stub the direct-send path so the test doesn't load esbuild/react-email.
+    const sendEmailNow = jest.fn().mockResolvedValue({ sent: true, to: 'x', subject: 's' });
+    jest.doMock('../../app/services/emailRenderer', () => ({ sendEmailNow }));
+
+    const NS = require('../../app/services/NotificationService');
+    const out = await NS.sendEmail({ to: 'x', subject: 's', template: 't', data: {} });
+
+    expect(sendEmailNow).toHaveBeenCalledWith({ to: 'x', subject: 's', template: 't', data: {} });
+    expect(out).toEqual({ sent: true, to: 'x', subject: 's' });
+  });
+
+  it('returns null and does not throw when the direct send also fails', async () => {
+    jest.resetModules();
+    jest.doMock('../../app/jobs/queue', () => ({
+      QUEUE_NAMES: { SEND_EMAIL: 'send-email' },
+      getQueue: () => null,
+    }));
+    jest.doMock('../../app/services/emailRenderer', () => ({
+      sendEmailNow: jest.fn().mockRejectedValue(new Error('resend down')),
+    }));
+
     const NS = require('../../app/services/NotificationService');
     const out = await NS.sendEmail({ to: 'x', subject: 's', template: 't', data: {} });
     expect(out).toBeNull();

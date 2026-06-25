@@ -21,12 +21,19 @@ eventBus.on(RETURN_APPROVED, async ({ returnId, shopId, approvedBy }) => {
       },
     });
 
-    // Send approved email
+    // Send approved email. Wrapped so an email failure can NEVER block
+    // label generation (NotificationService is already non-throwing, but
+    // this is belt-and-suspenders).
     if (returnRecord) {
-      await NotificationService.sendReturnApproved(returnRecord);
+      try {
+        await NotificationService.sendReturnApproved(returnRecord);
+      } catch (emailErr) {
+        console.error(`[Event] Approved email failed for ${returnId}:`, emailErr.message);
+      }
     }
 
-    // Generate label automatically
+    // Generate label automatically — this is the critical step and must
+    // run regardless of whether the approved email succeeded.
     try {
       const label = await LabelService.generateLabel(returnId);
       console.log(`[Event] Label generated for return ${returnId}: ${label.trackingCode}`);

@@ -1,21 +1,45 @@
 const { getQueue, QUEUE_NAMES } = require('../jobs/queue');
+const logger = require('../utils/logger');
 
 class NotificationService {
   /**
-   * Queue an email to be sent via the send-email worker.
+   * Dispatch an email. Prefers the durable BullMQ queue (retries +
+   * survives restarts). If the queue is unavailable — Redis down, over
+   * quota, etc. — falls back to sending directly via Resend so a Redis
+   * outage never drops a customer email or, worse, throws and aborts the
+   * caller (e.g. the return.approved handler, which then never reaches
+   * label generation). This method NEVER throws.
    */
   static async sendEmail({ to, subject, template, data }) {
-    const queue = getQueue(QUEUE_NAMES.SEND_EMAIL);
-    if (!queue) {
-      // Fallback: log the email in dev
-      console.log(`[Email] (queued) To: ${to} | Subject: ${subject} | Template: ${template}`);
-      return null;
+    // 1) Try the durable queue path.
+    let queue = null;
+    try {
+      queue = getQueue(QUEUE_NAMES.SEND_EMAIL);
+    } catch (err) {
+      logger.warn({ err: err.message }, 'Could not get email queue — will send directly');
     }
 
-    return queue.add('send-email', { to, subject, template, data }, {
-      attempts: 3,
-      backoff: { type: 'exponential', delay: 5000 },
-    });
+    if (queue) {
+      try {
+        return await queue.add('send-email', { to, subject, template, data }, {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+        });
+      } catch (err) {
+        logger.warn({ err: err.message, to, template }, 'Email queue add failed — sending directly');
+        // fall through to direct send
+      }
+    }
+
+    // 2) Direct fallback. Best-effort (no retry/durability), but far
+    //    better than dropping the email or throwing.
+    try {
+      const { sendEmailNow } = require('./emailRenderer');
+      return await sendEmailNow({ to, subject, template, data });
+    } catch (err) {
+      logger.error({ err: err.message, to, template }, 'Direct email send failed');
+      return null; // swallow — email failure must not break the caller
+    }
   }
 
   /**

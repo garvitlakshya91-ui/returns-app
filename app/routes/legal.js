@@ -110,7 +110,6 @@ const PRIVACY = page('Privacy Policy', `
       <li><strong>Upstash</strong> (Redis — job queue &amp; rate limiting)</li>
       <li><strong>Cloudflare R2</strong> (storage for return photos and labels)</li>
       <li><strong>Resend</strong> (transactional email delivery)</li>
-      <li><strong>Stripe</strong> (payment processing for paid returns, where enabled)</li>
       <li><strong>Sentry</strong> (error monitoring)</li>
       <li><strong>Shopify</strong> (the merchant's e-commerce platform)</li>
     </ul>

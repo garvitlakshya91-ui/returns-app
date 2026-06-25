@@ -28,6 +28,29 @@ class ExchangeService {
 
     await ExchangeService._assertVariantsAvailable(client, exchangeItems);
 
+    const lineItems = exchangeItems.map((item) => ({
+      variantId: item.exchangeVariantId,
+      quantity: item.quantity,
+    }));
+
+    // Add the return fee as a custom line item on the draft order so the buyer
+    // pays it through Shopify checkout (compliant) rather than an external
+    // processor. Refund/store-credit returns net the fee off the refund
+    // instead; exchanges have no refund to deduct from, so we bill it here.
+    const fee = Number(returnRecord.returnFee || 0);
+    if (fee > 0) {
+      lineItems.push({
+        title: 'Return fee',
+        quantity: 1,
+        requiresShipping: false,
+        taxable: false,
+        originalUnitPriceWithCurrency: {
+          amount: fee,
+          currencyCode: returnRecord.currency || 'GBP',
+        },
+      });
+    }
+
     const response = await client.request(`
       mutation draftOrderCreate($input: DraftOrderInput!) {
         draftOrderCreate(input: $input) {
@@ -43,10 +66,7 @@ class ExchangeService {
     `, {
       variables: {
         input: {
-          lineItems: exchangeItems.map((item) => ({
-            variantId: item.exchangeVariantId,
-            quantity: item.quantity,
-          })),
+          lineItems,
           note: `Exchange for ReturnFlow return #${returnRecord.id}`,
           email: returnRecord.customerEmail,
           tags: ['returnflow-exchange'],

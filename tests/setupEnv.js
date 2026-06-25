@@ -13,10 +13,6 @@ process.env.SHOPIFY_API_SECRET = 'test_api_secret_for_hmac';
 process.env.SCOPES = 'read_orders,write_orders';
 process.env.HOST = 'https://test.local';
 
-// Stripe (test keys; never used for real calls because we mock the SDK)
-process.env.STRIPE_SECRET_KEY = 'sk_test_dummy';
-process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_dummy';
-
 // Portal
 process.env.PORTAL_URL = 'https://portal.test.local';
 

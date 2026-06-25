@@ -56,10 +56,10 @@ Three surfaces, one Node deployable:
 app/                  Express backend
   config/             db, redis, shopify clients
   middleware/         auth (Shopify session), rate limiting, plan gating
-  routes/             auth (OAuth), webhooks, stripe webhook, legal, api/*
+  routes/             auth (OAuth), webhooks, legal, api/*
   services/           ReturnService, RefundService, ExchangeService,
-                      PolicyEngine, AnalyticsService, LabelService,
-                      StripeService, StorageService, NotificationService, carriers/
+                      PolicyEngine, AnalyticsService, LabelService, BillingService,
+                      StorageService, NotificationService, carriers/
   events/             event bus + handlers
   jobs/               BullMQ queue + workers (label, email, refund, analytics)
   utils/              encryption (aes-256-gcm), hmac, currency, idempotency
@@ -67,7 +67,7 @@ emails/               React Email templates
 web/merchant/         Polaris admin SPA (embedded)
 web/portal/           Tailwind customer portal SPA
 prisma/               schema + migrations
-tests/                Jest + supertest (158 tests)
+tests/                Jest + supertest (162 tests)
 brand/                app icon + generated App Store screenshots
 ```
 
@@ -99,12 +99,12 @@ npm --prefix web/merchant run dev
 See [`.env.example`](.env.example). Key ones: `DATABASE_URL` / `DIRECT_URL`
 (Supabase pooler), `REDIS_URL` (Upstash), `SHOPIFY_API_KEY` / `SHOPIFY_API_SECRET`,
 `ENCRYPTION_KEY` (32-byte hex), `R2_*`, `RESEND_API_KEY` / `RESEND_FROM`,
-`STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET`, `HOST`, `PORTAL_URL`, `SENTRY_DSN`.
+`HOST`, `PORTAL_URL`, `SENTRY_DSN`.
 
 ## Tests
 
 ```bash
-npm test                # 158 tests
+npm test                # 162 tests
 npm run test:coverage
 ```
 

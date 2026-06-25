@@ -22,7 +22,10 @@ class RefundService {
     const resolution = returnRecord.resolution;
     const totalValue = Number(returnRecord.totalValue);
     const fee = Number(returnRecord.returnFee || 0);
-    const refundAmount = totalValue - fee;
+    // Return fees are recovered by reducing the refund (Shopify-native — no
+    // off-platform charge). Never refund a negative amount if the fee somehow
+    // exceeds the item value.
+    const refundAmount = Math.max(0, totalValue - fee);
 
     const accessToken = decrypt(shop.shopifyToken);
     const session = { shop: shop.shopifyDomain, accessToken };

@@ -117,6 +117,44 @@ describe('app/uninstalled wipes the token', () => {
   });
 });
 
+describe('app_subscriptions/update syncs the plan', () => {
+  it('downgrades to FREE when a subscription is cancelled', async () => {
+    prisma.shop.findUnique.mockResolvedValue(fakeShop({ id: 'shop_1', plan: 'GROWTH' }));
+    prisma.shop.update.mockResolvedValue({});
+
+    const body = JSON.stringify({ app_subscription: { name: 'ReturnFlow Growth', status: 'CANCELLED' } });
+    await request(app)
+      .post('/webhooks/app_subscriptions/update')
+      .set('x-shopify-hmac-sha256', shopifyHmac(body))
+      .set('x-shopify-shop-domain', 'test-shop.myshopify.com')
+      .set('content-type', 'application/json')
+      .send(body);
+
+    await new Promise((r) => setImmediate(r));
+    expect(prisma.shop.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ plan: 'FREE' }),
+    }));
+  });
+
+  it('upgrades to the active plan and resets the cycle', async () => {
+    prisma.shop.findUnique.mockResolvedValue(fakeShop({ id: 'shop_1', plan: 'FREE' }));
+    prisma.shop.update.mockResolvedValue({});
+
+    const body = JSON.stringify({ app_subscription: { name: 'ReturnFlow Starter', status: 'ACTIVE' } });
+    await request(app)
+      .post('/webhooks/app_subscriptions/update')
+      .set('x-shopify-hmac-sha256', shopifyHmac(body))
+      .set('x-shopify-shop-domain', 'test-shop.myshopify.com')
+      .set('content-type', 'application/json')
+      .send(body);
+
+    await new Promise((r) => setImmediate(r));
+    expect(prisma.shop.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ plan: 'STARTER', returnCount: 0 }),
+    }));
+  });
+});
+
 describe('GDPR webhooks', () => {
   it('customers/redact anonymizes returns and clears photos', async () => {
     prisma.shop.findUnique.mockResolvedValue(fakeShop({ id: 'shop_1' }));

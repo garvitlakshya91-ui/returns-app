@@ -5,6 +5,7 @@ const prisma = require('../config/database');
 const eventBus = require('../events/eventBus');
 const { SHOP_UNINSTALLED } = require('../events/emitters');
 const StorageService = require('../services/StorageService');
+const BillingService = require('../services/BillingService');
 const logger = require('../utils/logger');
 
 const router = Router();
@@ -124,6 +125,27 @@ router.post('/shop/update', async (req, res) => {
     });
   } catch (err) {
     logger.error({ err }, 'shop/update error');
+  }
+});
+
+/**
+ * POST /webhooks/app_subscriptions/update
+ * Fires whenever a subscription's status changes — including merchant-initiated
+ * cancellations and declined charges done from Shopify's side. Keeps the local
+ * plan in sync so downgrades/cancels never require support or a reinstall.
+ */
+router.post('/app_subscriptions/update', async (req, res) => {
+  res.status(200).send('OK');
+  try {
+    const shopDomain = req.headers['x-shopify-shop-domain'];
+    const payload = JSON.parse(req.rawBody);
+    const sub = payload.app_subscription || {};
+    await BillingService.applySubscriptionStatus(shopDomain, {
+      name: sub.name,
+      status: sub.status,
+    });
+  } catch (err) {
+    logger.error({ err }, 'app_subscriptions/update error');
   }
 });
 

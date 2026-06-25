@@ -1,6 +1,7 @@
 const prisma = require('../config/database');
 const eventBus = require('../events/eventBus');
 const { RETURN_CREATED } = require('../events/emitters');
+const { computeReturnFee } = require('../utils/fees');
 
 class ReturnService {
   /**
@@ -8,6 +9,16 @@ class ReturnService {
    */
   static async createReturn({ shopId, shopifyOrderId, shopifyOrderName, customerEmail, customerName, items, resolution }) {
     const totalValue = items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+
+    // Compute the return fee from the shop's default active policy. The fee is
+    // never charged to the buyer directly (Shopify prohibits off-platform
+    // payments) — it's deducted from the refund / store credit, or added to the
+    // exchange's Shopify draft order at process time.
+    const policy = await prisma.returnPolicy.findFirst({
+      where: { shopId, isActive: true },
+      orderBy: { isDefault: 'desc' },
+    });
+    const returnFee = computeReturnFee(policy?.fees, items);
 
     const returnRecord = await prisma.return.create({
       data: {
@@ -17,6 +28,7 @@ class ReturnService {
         customerEmail,
         customerName,
         totalValue,
+        returnFee,
         resolution,
         items: {
           create: items.map((item) => ({

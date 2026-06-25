@@ -108,6 +108,53 @@ describe('ExchangeService.createExchange', () => {
     }));
   });
 
+  it('adds the return fee as a custom draft-order line item when fee > 0', async () => {
+    prisma.return.findUnique.mockResolvedValue(ret([
+      fakeReturnItem({ id: 'item_x', exchangeVariantId: 'gid://shopify/ProductVariant/9', quantity: 1 }),
+    ], { returnFee: 2.5, currency: 'GBP' }));
+    shopifyClient.request
+      .mockResolvedValueOnce({
+        data: { nodes: [{ id: 'gid://shopify/ProductVariant/9', availableForSale: true, inventoryQuantity: 10, displayName: 'OK Tee' }] },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          draftOrderCreate: {
+            draftOrder: { id: 'gid://shopify/DraftOrder/100', name: '#D1001', invoiceUrl: 'https://x/invoice', totalPriceSet: { shopMoney: { amount: '2.50' } } },
+            userErrors: [],
+          },
+        },
+      });
+    prisma.returnItem.update.mockResolvedValue({});
+
+    await ExchangeService.createExchange('ret_test_1');
+
+    // Second request is the draftOrderCreate mutation; inspect its variables.
+    const draftCall = shopifyClient.request.mock.calls[1];
+    const lineItems = draftCall[1].variables.input.lineItems;
+    const feeLine = lineItems.find((li) => li.title === 'Return fee');
+    expect(feeLine).toBeDefined();
+    expect(feeLine.originalUnitPriceWithCurrency).toEqual({ amount: 2.5, currencyCode: 'GBP' });
+  });
+
+  it('does NOT add a fee line item when fee is 0', async () => {
+    prisma.return.findUnique.mockResolvedValue(ret([
+      fakeReturnItem({ id: 'item_x', exchangeVariantId: 'gid://shopify/ProductVariant/9', quantity: 1 }),
+    ], { returnFee: 0 }));
+    shopifyClient.request
+      .mockResolvedValueOnce({
+        data: { nodes: [{ id: 'gid://shopify/ProductVariant/9', availableForSale: true, inventoryQuantity: 10, displayName: 'OK Tee' }] },
+      })
+      .mockResolvedValueOnce({
+        data: { draftOrderCreate: { draftOrder: { id: 'd', name: '#D1', invoiceUrl: 'u', totalPriceSet: { shopMoney: { amount: '0.00' } } }, userErrors: [] } },
+      });
+    prisma.returnItem.update.mockResolvedValue({});
+
+    await ExchangeService.createExchange('ret_test_1');
+
+    const lineItems = shopifyClient.request.mock.calls[1][1].variables.input.lineItems;
+    expect(lineItems.some((li) => li.title === 'Return fee')).toBe(false);
+  });
+
   it('throws when draftOrderCreate returns userErrors', async () => {
     prisma.return.findUnique.mockResolvedValue(ret([
       fakeReturnItem({ exchangeVariantId: 'gid://shopify/ProductVariant/9', quantity: 1 }),

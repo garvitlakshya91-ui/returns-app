@@ -1,12 +1,11 @@
 const request = require('supertest');
 const express = require('express');
-const { installPrismaMock, installShopifyMock, installStripeMock, fakeShop } = require('../helpers');
+const { installPrismaMock, installShopifyMock, fakeShop } = require('../helpers');
 const { encrypt } = require('../../app/utils/encryption');
 
 let app;
 let prisma;
 let shopifyClient;
-let stripe;
 
 beforeEach(() => {
   jest.resetModules();
@@ -21,7 +20,6 @@ beforeEach(() => {
 
   prisma = installPrismaMock();
   shopifyClient = installShopifyMock();
-  stripe = installStripeMock();
 
   // Stub PolicyEngine.evaluateEligibility to always allow — focuses these
   // tests on the route layer, not policy logic (covered separately).
@@ -174,44 +172,6 @@ describe('POST /api/portal/returns', () => {
       });
     expect(res.status).toBe(201);
     expect(res.body.id).toBe('ret_new');
-  });
-});
-
-describe('POST /api/portal/returns/:id/pay', () => {
-  it('404 when return not found', async () => {
-    prisma.return.findUnique.mockResolvedValue(null);
-    const res = await request(app).post('/api/portal/returns/x/pay');
-    expect(res.status).toBe(404);
-  });
-
-  it('409 when return not in REQUESTED status', async () => {
-    prisma.return.findUnique.mockResolvedValue({ id: 'r', status: 'APPROVED', returnFee: 5 });
-    const res = await request(app).post('/api/portal/returns/r/pay');
-    expect(res.status).toBe(409);
-  });
-
-  it('400 when return has no fee', async () => {
-    prisma.return.findUnique.mockResolvedValue({ id: 'r', status: 'REQUESTED', returnFee: 0 });
-    const res = await request(app).post('/api/portal/returns/r/pay');
-    expect(res.status).toBe(400);
-  });
-
-  it('200 returns Stripe Checkout URL and logs an event', async () => {
-    prisma.return.findUnique.mockResolvedValue({
-      id: 'r', shopId: 's', status: 'REQUESTED',
-      returnFee: 2.5, shopifyOrderName: '#1001', customerEmail: 'j@x.com', currency: 'GBP',
-    });
-    prisma.returnEvent.create.mockResolvedValue({});
-    stripe.checkout.sessions.create.mockResolvedValue({
-      id: 'cs_test', url: 'https://stripe/checkout/cs_test',
-    });
-
-    const res = await request(app).post('/api/portal/returns/r/pay');
-    expect(res.status).toBe(200);
-    expect(res.body.url).toBe('https://stripe/checkout/cs_test');
-    expect(prisma.returnEvent.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ type: 'stripe.checkout_created' }),
-    }));
   });
 });
 

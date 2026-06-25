@@ -82,6 +82,18 @@ describe('RefundService.processRefund — REFUND path', () => {
     expect(prisma.return.update.mock.calls[0][0].data.refundAmount).toBe(45);
   });
 
+  it('never refunds a negative amount when the fee exceeds item value', async () => {
+    prisma.return.findUnique.mockResolvedValue(ret({ resolution: 'REFUND', totalValue: 3, returnFee: 5 }));
+    prisma.return.update.mockResolvedValue({});
+    shopifyClient.request.mockResolvedValue({
+      data: { refundCreate: { refund: { id: 'r' }, userErrors: [] } },
+    });
+
+    await RefundService.processRefund('ret_test_1');
+
+    expect(prisma.return.update.mock.calls[0][0].data.refundAmount).toBe(0);
+  });
+
   it('throws when Shopify returns userErrors', async () => {
     prisma.return.findUnique.mockResolvedValue(ret({ resolution: 'REFUND' }));
     shopifyClient.request.mockResolvedValue({

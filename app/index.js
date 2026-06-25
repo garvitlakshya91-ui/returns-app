@@ -122,8 +122,8 @@ app.use(cors({
 }));
 
 // ─── Raw body capture for webhook signature verification ───
-// MUST be registered BEFORE express.json. Used by both Shopify HMAC and
-// Stripe webhook signature checks.
+// MUST be registered BEFORE express.json. Used by Shopify webhook HMAC
+// verification (the raw bytes must match exactly what Shopify signed).
 app.use('/webhooks', (req, res, next) => {
   let data = '';
   req.setEncoding('utf8');
@@ -190,9 +190,6 @@ app.get('/health', async (req, res) => {
 app.use('/', require('./routes/legal'));
 app.use('/', require('./routes/auth'));
 
-// Stripe webhook must be mounted BEFORE the generic /webhooks router so it
-// doesn't pick up the Shopify HMAC verification middleware applied there.
-app.use('/webhooks/stripe', require('./routes/stripeWebhook'));
 app.use('/webhooks', require('./routes/webhooks'));
 
 // BullMQ admin dashboard — gated by basic auth from env. Mounted BEFORE the

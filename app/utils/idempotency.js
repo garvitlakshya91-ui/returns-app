@@ -1,7 +1,7 @@
 const { getRedis } = require('../config/redis');
 const logger = require('./logger');
 
-const TTL_SECONDS = 60 * 60 * 24; // 24h — Shopify/Stripe retry windows are shorter
+const TTL_SECONDS = 60 * 60 * 24; // 24h — Shopify's webhook retry window is shorter
 const KEY_PREFIX = 'idem:';
 
 /**

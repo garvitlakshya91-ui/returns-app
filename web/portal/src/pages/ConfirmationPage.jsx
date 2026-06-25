@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { CheckCircle, Package, MapPin, CreditCard, Loader2 } from 'lucide-react';
 import ProgressStepper from '../components/ProgressStepper';
-import { createReturn, createPayment } from '../api';
+import { createReturn } from '../api';
 
 const RESOLUTION_LABELS = {
   REFUND: 'Refund to original payment',
@@ -57,19 +57,6 @@ export default function ConfirmationPage({ data }) {
         dropoff: data.dropoff,
       });
 
-      // If the return carries a fee, route the customer through Stripe Checkout
-      // before showing the success screen. On payment, Stripe redirects them
-      // back to /return/:id?paid=1.
-      const fee = Number(returnResult.returnFee || 0);
-      if (fee > 0) {
-        const payment = await createPayment(returnResult.id);
-        if (payment?.url) {
-          window.location.href = payment.url;
-          return;
-        }
-        throw new Error('Could not start payment. Please try again.');
-      }
-
       setResult(returnResult);
       setSubmitted(true);
     } catch (err) {
@@ -97,6 +84,19 @@ export default function ConfirmationPage({ data }) {
             <p className="text-xs uppercase tracking-wide text-gray-400 mb-1">Return reference</p>
             <p className="font-mono text-lg font-semibold text-gray-900">{result.id || 'RF-PENDING'}</p>
           </div>
+
+          {Number(result.returnFee || 0) > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-left text-sm mb-6">
+              <p className="font-medium text-amber-900">
+                {'£'}{Number(result.returnFee).toFixed(2)} return fee
+              </p>
+              <p className="text-amber-700 mt-0.5">
+                {data.resolution === 'EXCHANGE'
+                  ? 'This will be added to your exchange order at checkout.'
+                  : 'This will be deducted from your refund — you don’t pay anything now.'}
+              </p>
+            </div>
+          )}
 
           <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4 text-left text-sm">
             <p className="font-medium text-indigo-900 mb-1">What happens next?</p>

@@ -37,6 +37,48 @@ describe('ReturnService.createReturn', () => {
     expect(result).toEqual(created);
   });
 
+  it('computes returnFee from the default policy and the items reasons', async () => {
+    prisma.returnPolicy.findFirst.mockResolvedValue({
+      fees: { changedMind: 3, doesntFit: 1, damaged: 0 },
+    });
+    prisma.return.create.mockResolvedValue(fakeReturn());
+    prisma.shop.update.mockResolvedValue({});
+
+    await ReturnService.createReturn({
+      shopId: 'shop_test_1',
+      shopifyOrderId: 'o1',
+      shopifyOrderName: '#1',
+      customerEmail: 'e@x.com',
+      customerName: 'E',
+      items: [
+        { lineItemId: 'li1', productTitle: 'A', quantity: 1, unitPrice: 20, reason: 'doesnt_fit' },
+        { lineItemId: 'li2', productTitle: 'B', quantity: 1, unitPrice: 20, reason: 'changed_mind' },
+      ],
+      resolution: 'REFUND',
+    });
+
+    // Max fee across reasons (changed_mind = 3) is applied once per return.
+    expect(prisma.return.create.mock.calls[0][0].data.returnFee).toBe(3);
+  });
+
+  it('defaults returnFee to 0 when no policy / fees are configured', async () => {
+    prisma.returnPolicy.findFirst.mockResolvedValue(null);
+    prisma.return.create.mockResolvedValue(fakeReturn());
+    prisma.shop.update.mockResolvedValue({});
+
+    await ReturnService.createReturn({
+      shopId: 'shop_test_1',
+      shopifyOrderId: 'o1',
+      shopifyOrderName: '#1',
+      customerEmail: 'e@x.com',
+      customerName: 'E',
+      items: [{ lineItemId: 'li', productTitle: 'X', quantity: 1, unitPrice: 10, reason: 'changed_mind' }],
+      resolution: 'REFUND',
+    });
+
+    expect(prisma.return.create.mock.calls[0][0].data.returnFee).toBe(0);
+  });
+
   it('increments the shop returnCount', async () => {
     prisma.return.create.mockResolvedValue(fakeReturn());
     prisma.shop.update.mockResolvedValue({});

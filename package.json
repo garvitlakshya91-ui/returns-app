@@ -59,8 +59,7 @@
     "rate-limit-redis": "^4.3.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "resend": "^6.10.0",
-    "stripe": "^22.0.0"
+    "resend": "^6.10.0"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",

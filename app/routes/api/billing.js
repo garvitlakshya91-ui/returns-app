@@ -1,16 +1,10 @@
 const { Router } = require('express');
 const { verifyShopifySession } = require('../../middleware/auth');
-const shopify = require('../../config/shopify');
+const BillingService = require('../../services/BillingService');
 const prisma = require('../../config/database');
-const { decrypt } = require('../../utils/encryption');
 const logger = require('../../utils/logger');
 
-const PLANS = {
-  FREE:    { amount: 0,  name: 'Free',    returnsPerMonth: 30 },
-  STARTER: { amount: 9,  name: 'Starter', returnsPerMonth: 150 },
-  GROWTH:  { amount: 29, name: 'Growth',  returnsPerMonth: null },
-  PRO:     { amount: 49, name: 'Pro',     returnsPerMonth: null },
-};
+const { PLANS } = BillingService;
 
 const router = Router();
 router.use(verifyShopifySession);
@@ -21,29 +15,40 @@ router.use(verifyShopifySession);
 router.get('/plans', (req, res) => {
   res.json({
     currentPlan: req.shop.plan,
-    plans: Object.entries(PLANS).map(([key, p]) => ({
-      id: key,
-      ...p,
-    })),
+    plans: Object.entries(PLANS).map(([key, p]) => ({ id: key, ...p })),
   });
 });
 
 /**
  * POST /api/admin/billing/subscribe
- * Create an app subscription via Shopify Billing API. Returns confirmation URL.
+ * For a paid plan: create an app subscription and return the confirmation URL.
+ * For FREE: cancel any active subscription (self-serve downgrade) and drop the
+ * merchant to the Free plan immediately — no support contact, no reinstall.
  */
 router.post('/subscribe', async (req, res) => {
   try {
     const { plan } = req.body;
-    const planConfig = PLANS[plan];
-    if (!planConfig || plan === 'FREE') {
+    if (!PLANS[plan]) {
       return res.status(400).json({ error: 'Invalid plan' });
     }
 
-    const accessToken = decrypt(req.shop.shopifyToken);
-    const session = { shop: req.shopDomain, accessToken };
-    const client = new shopify.clients.Graphql({ session });
+    const client = BillingService.graphqlClient(req.shop);
 
+    // ── Downgrade / cancel ──
+    if (plan === 'FREE') {
+      const active = await BillingService.getActiveSubscription(client);
+      if (active) {
+        await BillingService.cancelSubscription(client, active.id);
+      }
+      await prisma.shop.update({
+        where: { id: req.shopId },
+        data: { plan: 'FREE' },
+      });
+      return res.json({ ok: true, plan: 'FREE', cancelled: Boolean(active) });
+    }
+
+    // ── Upgrade / change paid plan ──
+    const planConfig = PLANS[plan];
     const response = await client.request(`
       mutation AppSubscriptionCreate(
         $name: String!,
@@ -64,8 +69,8 @@ router.post('/subscribe', async (req, res) => {
       }
     `, {
       variables: {
-        name: `ReturnFlow ${planConfig.name}`,
-        returnUrl: `${process.env.HOST}/?shop=${req.shopDomain}&billing=confirmed`,
+        name: BillingService.subscriptionName(plan),
+        returnUrl: `${process.env.HOST}/?shop=${req.shopDomain}&billing=confirmed&plan=${plan}`,
         lineItems: [{
           plan: {
             appRecurringPricingDetails: {
@@ -95,23 +100,29 @@ router.post('/subscribe', async (req, res) => {
 
 /**
  * POST /api/admin/billing/confirm
- * Called after Shopify billing confirmation redirect. Updates plan locally.
+ * Called after the Shopify billing confirmation redirect. We DO NOT trust the
+ * client-supplied plan — we re-query the Billing API and set the local plan to
+ * whatever subscription Shopify reports as ACTIVE. If the merchant declined the
+ * charge, there's no active subscription and they stay on FREE.
  */
 router.post('/confirm', async (req, res) => {
   try {
-    const { plan } = req.body;
-    if (!PLANS[plan]) return res.status(400).json({ error: 'Invalid plan' });
+    const client = BillingService.graphqlClient(req.shop);
+    const active = await BillingService.getActiveSubscription(client);
 
+    if (!active) {
+      // Declined or not yet active — ensure we're on FREE and report it.
+      await prisma.shop.update({ where: { id: req.shopId }, data: { plan: 'FREE' } });
+      return res.json({ ok: true, plan: 'FREE', active: false });
+    }
+
+    const planKey = BillingService.planKeyFromName(active.name) || 'FREE';
     await prisma.shop.update({
       where: { id: req.shopId },
-      data: {
-        plan,
-        billingCycleStart: new Date(),
-        returnCount: 0,
-      },
+      data: { plan: planKey, billingCycleStart: new Date(), returnCount: 0 },
     });
 
-    res.json({ ok: true, plan });
+    res.json({ ok: true, plan: planKey, active: true });
   } catch (err) {
     logger.error({ err }, 'Billing confirm error');
     res.status(500).json({ error: 'Failed to confirm plan' });

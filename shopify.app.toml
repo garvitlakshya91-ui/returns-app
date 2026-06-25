@@ -11,9 +11,6 @@ handle = "returns-app-garvit-20260613"
 # tunnel), set back to false before running `shopify app deploy` for prod
 # so the tunnel URL doesn't accidentally become the production app URL.
 automatically_update_urls_on_dev = false
-# REQUIRED for `shopify app deploy` to push application_url + redirect_urls.
-# Without this, deploy only ships extensions and silently keeps old URLs.
-include_config_on_deploy = true
 
 [webhooks]
 api_version = "2026-04"
@@ -30,9 +27,13 @@ api_version = "2026-04"
   uri = "/webhooks/shop/update"
   topics = [ "shop/update" ]
 
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app_subscriptions/update"
+  topics = [ "app_subscriptions/update" ]
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_orders,write_orders,read_products,write_gift_cards,read_customers,read_shipping"
+scopes = "read_orders,write_orders,read_products,write_gift_cards,read_shipping"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 

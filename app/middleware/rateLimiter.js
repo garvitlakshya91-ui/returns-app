@@ -3,7 +3,11 @@ const { RedisStore } = require('rate-limit-redis');
 const { getRedis } = require('../config/redis');
 const logger = require('../utils/logger');
 
-function makeStore() {
+// Each limiter MUST get its own key prefix. Otherwise two limiters applied
+// to the same route (e.g. portalLimiter + lookupLimiter on /lookup) write to
+// the same Redis key for a given IP, double-counting each other and tripping
+// express-rate-limit's ERR_ERL_DOUBLE_COUNT validation.
+function makeStore(prefix) {
   const redis = getRedis();
   if (!redis) {
     logger.warn('Rate limiter using in-memory store — switch to Redis for production');
@@ -11,7 +15,7 @@ function makeStore() {
   }
   return new RedisStore({
     sendCommand: (...args) => redis.call(...args),
-    prefix: 'rl:',
+    prefix,
   });
 }
 
@@ -44,18 +48,19 @@ const portalLimiter = rateLimit({
   max: 120,
   standardHeaders: true,
   legacyHeaders: false,
-  store: makeStore(),
+  store: makeStore('rl:portal:'),
   message: { error: 'Too many requests. Please try again later.' },
 });
 
 // Order lookup — tighter because this is the main credential-stuffing
-// attack surface (email + order # enumeration).
+// attack surface (email + order # enumeration). 30/15min still blocks
+// enumeration while leaving headroom for a customer who mistypes a few times.
 const lookupLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: 30,
   standardHeaders: true,
   legacyHeaders: false,
-  store: makeStore(),
+  store: makeStore('rl:lookup:'),
   message: { error: 'Too many lookup attempts. Please try again later.' },
 });
 
@@ -65,7 +70,7 @@ const createReturnLimiter = rateLimit({
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  store: makeStore(),
+  store: makeStore('rl:create:'),
   message: { error: 'Too many return submissions. Please try again later.' },
 });
 
@@ -76,7 +81,7 @@ const adminLimiter = rateLimit({
   max: 600,
   standardHeaders: true,
   legacyHeaders: false,
-  store: makeStore(),
+  store: makeStore('rl:admin:'),
   message: { error: 'Too many admin API requests. Please slow down.' },
 });
 

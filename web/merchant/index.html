@@ -2,9 +2,14 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- Shopify App Bridge (CDN). Required by Shopify's embedded-app checks:
+         the api-key meta + this script MUST load before the app bundle.
+         The content is filled at runtime by the backend (getMerchantHtml). -->
+    <meta name="shopify-api-key" content="%VITE_SHOPIFY_API_KEY%" />
+    <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>merchant</title>
+    <title>ReturnFlow</title>
   </head>
   <body>
     <div id="root"></div>

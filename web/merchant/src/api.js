@@ -1,42 +1,20 @@
-import { createApp } from '@shopify/app-bridge';
-import { getSessionToken } from '@shopify/app-bridge/utilities';
-
 const API_BASE = '/api/admin';
 
-// IMPORTANT: capture the App Bridge params at MODULE LOAD, not on each call.
-// The embed URL `/admin/?shop=...&host=...` gets rewritten by React Router
-// to `/` shortly after mount (via the <Navigate to="/"> catch-all), which
-// strips the query string. If getApp() reads window.location.search later,
-// it sees nothing and falls back to 'dev-token'. So we grab the values once
-// while they're still present.
-const _initialParams = new URLSearchParams(window.location.search);
-const _host = _initialParams.get('host');
-const _apiKey = import.meta.env.VITE_SHOPIFY_API_KEY || window.__SHOPIFY_API_KEY__;
-
-let appBridgeApp = null;
-function getApp() {
-  if (appBridgeApp) return appBridgeApp;
-  if (!_host || !_apiKey) {
-    // Running standalone (not embedded) — backend will 401 these calls
-    return null;
-  }
-  appBridgeApp = createApp({
-    apiKey: _apiKey,
-    host: _host,
-    forceRedirect: true,
-  });
-  return appBridgeApp;
-}
-
+// Session token via the CDN App Bridge global (`window.shopify`), loaded
+// from https://cdn.shopify.com/shopifycloud/app-bridge.js in index.html.
+// shopify.idToken() returns a fresh signed session-token JWT that the
+// backend verifies in verifyShopifySession. Falls back to 'dev-token' when
+// not embedded (e.g. local standalone dev) — the backend rejects that, which
+// is the expected behavior outside Shopify Admin.
 async function getToken() {
-  const app = getApp();
-  if (!app) return 'dev-token'; // Dev fallback when not embedded
-  try {
-    return await getSessionToken(app);
-  } catch (err) {
-    console.warn('App Bridge session token error:', err);
-    return 'dev-token';
+  if (typeof window !== 'undefined' && window.shopify && typeof window.shopify.idToken === 'function') {
+    try {
+      return await window.shopify.idToken();
+    } catch (err) {
+      console.warn('App Bridge idToken error:', err);
+    }
   }
+  return 'dev-token';
 }
 
 async function apiFetch(path, options = {}) {

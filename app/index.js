@@ -222,16 +222,24 @@ app.use('/portal', express.static(portalDist));
 // so the Shopify API key gets injected.
 app.use('/admin', express.static(merchantDist, { index: false }));
 
-// Serve the merchant SPA's index.html with the Shopify API key injected as
-// window.__SHOPIFY_API_KEY__ so App Bridge can authenticate without needing a
-// VITE_SHOPIFY_API_KEY at build time. Read once, patch on every request.
+// Serve the merchant SPA's index.html with the Shopify API key injected.
+// The CDN App Bridge reads <meta name="shopify-api-key">, so we fill that
+// meta's content with the real key at serve time (the build can't reliably
+// bake VITE_SHOPIFY_API_KEY on Railway). Also expose window.__SHOPIFY_API_KEY__
+// as a harmless legacy fallback. Read once, patch on every request.
 const fs = require('fs');
 let merchantHtml = null;
 function getMerchantHtml() {
   if (merchantHtml !== null) return merchantHtml;
   try {
-    const raw = fs.readFileSync(path.join(merchantDist, 'index.html'), 'utf8');
-    const inject = `<script>window.__SHOPIFY_API_KEY__ = ${JSON.stringify(process.env.SHOPIFY_API_KEY || '')};</script>`;
+    const key = process.env.SHOPIFY_API_KEY || '';
+    let raw = fs.readFileSync(path.join(merchantDist, 'index.html'), 'utf8');
+    // Fill the App Bridge api-key meta (whatever placeholder/baked value it has).
+    raw = raw.replace(
+      /(<meta name="shopify-api-key" content=")[^"]*(")/,
+      `$1${key}$2`,
+    );
+    const inject = `<script>window.__SHOPIFY_API_KEY__ = ${JSON.stringify(key)};</script>`;
     merchantHtml = raw.replace('</head>', `${inject}</head>`);
   } catch {
     merchantHtml = ''; // dist not built yet — let Express 404 naturally

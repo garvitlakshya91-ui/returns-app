@@ -2,6 +2,7 @@ const { Router } = require('express');
 const { verifyShopifySession } = require('../../middleware/auth');
 const prisma = require('../../config/database');
 const { encrypt, decrypt } = require('../../utils/encryption');
+const { PLAN_LIMITS } = require('../../middleware/planGating');
 const logger = require('../../utils/logger');
 
 const SUPPORTED_CARRIERS = ['evri', 'royalmail', 'inpost'];
@@ -44,9 +45,36 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: `Unsupported carrier. Choose from: ${SUPPORTED_CARRIERS.join(', ')}` });
     }
 
-    const encryptedCreds = credentials
+    // Enforce the plan's active-carrier limit. We compute the set of carriers
+    // that would be active *after* this change and reject if it exceeds the cap.
+    const shop = await prisma.shop.findUnique({
+      where: { id: req.shopId },
+      select: { plan: true },
+    });
+    const limit = (PLAN_LIMITS[shop?.plan] || PLAN_LIMITS.FREE).carriers;
+    const existing = await prisma.carrierConfig.findMany({
+      where: { shopId: req.shopId },
+      select: { carrier: true, isActive: true, credentials: true },
+    });
+    const activeSet = new Set(existing.filter((c) => c.isActive).map((c) => c.carrier));
+    if (isActive) activeSet.add(carrier);
+    else activeSet.delete(carrier);
+    if (activeSet.size > limit) {
+      return res.status(403).json({
+        error: `Your ${shop?.plan || 'FREE'} plan allows ${limit} active carrier${limit > 1 ? 's' : ''}. Upgrade your plan to connect more.`,
+        plan: shop?.plan || 'FREE',
+        carrierLimit: limit,
+      });
+    }
+
+    // Only re-encrypt when fresh credentials are supplied. This lets the
+    // merchant toggle a carrier active/inactive (or tweak settings) without
+    // having to re-enter their API keys — we keep whatever is already stored.
+    const hasNewCreds = credentials && Object.keys(credentials).length > 0;
+    const prior = existing.find((c) => c.carrier === carrier);
+    const encryptedCreds = hasNewCreds
       ? { encrypted: encrypt(JSON.stringify(credentials)) }
-      : {};
+      : (prior?.credentials || {});
 
     const config = await prisma.carrierConfig.upsert({
       where: { shopId_carrier: { shopId: req.shopId, carrier } },

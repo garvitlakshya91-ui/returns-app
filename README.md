@@ -67,7 +67,7 @@ emails/               React Email templates
 web/merchant/         Polaris admin SPA (embedded)
 web/portal/           Tailwind customer portal SPA
 prisma/               schema + migrations
-tests/                Jest + supertest (162 tests)
+tests/                Jest + supertest (169 tests)
 brand/                app icon + generated App Store screenshots
 ```
 
@@ -104,7 +104,7 @@ See [`.env.example`](.env.example). Key ones: `DATABASE_URL` / `DIRECT_URL`
 ## Tests
 
 ```bash
-npm test                # 162 tests
+npm test                # 169 tests
 npm run test:coverage
 ```
 

@@ -15,6 +15,7 @@ import {
 import { OrderIcon, ClockIcon, CheckCircleIcon, CashDollarIcon } from '@shopify/polaris-icons';
 import MetricCard from '../components/MetricCard';
 import ReturnStatusBadge from '../components/ReturnStatusBadge';
+import SetupGuide from '../components/SetupGuide';
 import { returnsApi } from '../api';
 
 export default function DashboardPage() {
@@ -61,6 +62,11 @@ export default function DashboardPage() {
   return (
     <Page title="Dashboard">
       <Layout>
+        {/* First-run onboarding checklist (hides itself once dismissed) */}
+        <Layout.Section>
+          <SetupGuide />
+        </Layout.Section>
+
         {/* Metrics row */}
         <Layout.Section>
           <InlineStack gap="400" wrap={false}>

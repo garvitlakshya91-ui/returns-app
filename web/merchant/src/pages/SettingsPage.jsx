@@ -12,6 +12,7 @@ import {
   Select,
 } from '@shopify/polaris';
 import { settingsApi } from '../api';
+import CarrierConnectCard from '../components/CarrierConnectCard';
 
 export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
@@ -111,6 +112,11 @@ export default function SettingsPage() {
               />
             </BlockStack>
           </Card>
+        </Layout.Section>
+
+        {/* Carriers */}
+        <Layout.Section>
+          <CarrierConnectCard plan={shopInfo.plan || 'FREE'} />
         </Layout.Section>
 
         {/* Notifications */}

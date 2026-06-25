@@ -12,6 +12,7 @@ import {
   DataTable,
   EmptyState,
 } from '@shopify/polaris';
+import { OrderIcon, ClockIcon, CheckCircleIcon, CashDollarIcon } from '@shopify/polaris-icons';
 import MetricCard from '../components/MetricCard';
 import ReturnStatusBadge from '../components/ReturnStatusBadge';
 import { returnsApi } from '../api';
@@ -64,16 +65,16 @@ export default function DashboardPage() {
         <Layout.Section>
           <InlineStack gap="400" wrap={false}>
             <div style={{ flex: 1 }}>
-              <MetricCard title="Total Returns" value={stats.total} />
+              <MetricCard title="Total Returns" value={stats.total} icon={OrderIcon} tone="default" />
             </div>
             <div style={{ flex: 1 }}>
-              <MetricCard title="Pending Review" value={stats.pending} />
+              <MetricCard title="Pending Review" value={stats.pending} icon={ClockIcon} tone="warning" />
             </div>
             <div style={{ flex: 1 }}>
-              <MetricCard title="Processed" value={stats.processed} />
+              <MetricCard title="Processed" value={stats.processed} icon={CheckCircleIcon} tone="success" />
             </div>
             <div style={{ flex: 1 }}>
-              <MetricCard title="Return Value" value={`£${stats.value.toFixed(2)}`} />
+              <MetricCard title="Return Value" value={`£${stats.value.toFixed(2)}`} icon={CashDollarIcon} tone="default" />
             </div>
           </InlineStack>
         </Layout.Section>

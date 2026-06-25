@@ -1,18 +1,23 @@
 import { Badge } from '@shopify/polaris';
 
+// tone = colour, progress = the little pie indicator Polaris renders.
 const STATUS_MAP = {
-  REQUESTED: { tone: 'attention', label: 'Requested' },
-  APPROVED: { tone: 'info', label: 'Approved' },
-  LABEL_SENT: { tone: 'info', label: 'Label Sent' },
-  IN_TRANSIT: { tone: 'warning', label: 'In Transit' },
-  RECEIVED: { tone: 'info', label: 'Received' },
-  INSPECTING: { tone: 'warning', label: 'Inspecting' },
-  PROCESSED: { tone: 'success', label: 'Processed' },
-  REJECTED: { tone: 'critical', label: 'Rejected' },
-  CANCELLED: { tone: 'new', label: 'Cancelled' },
+  REQUESTED:  { tone: 'attention', progress: 'incomplete',        label: 'Requested' },
+  APPROVED:   { tone: 'info',      progress: 'partiallyComplete',  label: 'Approved' },
+  LABEL_SENT: { tone: 'info',      progress: 'partiallyComplete',  label: 'Label sent' },
+  IN_TRANSIT: { tone: 'warning',   progress: 'partiallyComplete',  label: 'In transit' },
+  RECEIVED:   { tone: 'info',      progress: 'partiallyComplete',  label: 'Received' },
+  INSPECTING: { tone: 'warning',   progress: 'partiallyComplete',  label: 'Inspecting' },
+  PROCESSED:  { tone: 'success',   progress: 'complete',           label: 'Processed' },
+  REJECTED:   { tone: 'critical',  progress: 'complete',           label: 'Rejected' },
+  CANCELLED:  { tone: 'new',       progress: 'complete',           label: 'Cancelled' },
 };
 
 export default function ReturnStatusBadge({ status }) {
   const config = STATUS_MAP[status] || { tone: 'new', label: status };
-  return <Badge tone={config.tone}>{config.label}</Badge>;
+  return (
+    <Badge tone={config.tone} progress={config.progress}>
+      {config.label}
+    </Badge>
+  );
 }

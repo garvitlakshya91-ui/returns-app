@@ -1,0 +1,37 @@
+<svg width="1200" height="1200" viewBox="0 0 1200 1200" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="ReturnFlow app icon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="1200" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#4338CA"/>
+    </linearGradient>
+    <linearGradient id="boxTop" x1="600" y1="360" x2="600" y2="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E0E7FF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded-square background (App Store-safe corner radius ~22%) -->
+  <rect width="1200" height="1200" rx="264" fill="url(#bg)"/>
+
+  <!-- Subtle top light -->
+  <rect width="1200" height="1200" rx="264" fill="white" opacity="0.06"/>
+
+  <!-- Circular "return" arrow encircling the package -->
+  <g stroke="#FFFFFF" stroke-width="48" stroke-linecap="round" fill="none" opacity="0.95">
+    <path d="M 360 600 A 240 240 0 1 1 470 802"/>
+  </g>
+  <!-- Arrowhead at the open end of the arc -->
+  <path d="M 470 802 L 408 792 M 470 802 L 480 740" stroke="#FFFFFF" stroke-width="48" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- Package box (isometric) -->
+  <g>
+    <!-- box top -->
+    <path d="M600 392 L740 462 L600 532 L460 462 Z" fill="url(#boxTop)"/>
+    <!-- left face -->
+    <path d="M460 462 L600 532 L600 700 L460 630 Z" fill="#C7D2FE"/>
+    <!-- right face -->
+    <path d="M740 462 L600 532 L600 700 L740 630 Z" fill="#A5B4FC"/>
+    <!-- tape line -->
+    <path d="M600 532 L600 700" stroke="#6366F1" stroke-width="14" opacity="0.5"/>
+  </g>
+</svg>

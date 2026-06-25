@@ -60,9 +60,8 @@ export default function ResolutionPage({ data, update }) {
               key={res.value}
               type="button"
               onClick={() => setResolution(res.value)}
-              className={`w-full text-left p-4 rounded-lg border-2 transition-all
-                ${isSelected ? 'border-indigo-600 bg-indigo-50' : 'border-gray-200 bg-white hover:border-gray-300'}
-              `}
+              aria-pressed={isSelected}
+              className={`option-card ${isSelected ? 'option-card-active' : 'option-card-idle'}`}
             >
               <div className="flex items-start gap-3">
                 <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0
@@ -91,7 +90,7 @@ export default function ResolutionPage({ data, update }) {
         <button
           type="button"
           onClick={() => navigate(`/${shopSlug}/reason`)}
-          className="flex-1 py-3 px-4 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
+          className="btn-secondary flex-1"
         >
           <ArrowLeft className="w-4 h-4" />
           Back
@@ -100,7 +99,7 @@ export default function ResolutionPage({ data, update }) {
           type="button"
           onClick={handleNext}
           disabled={!resolution}
-          className="flex-1 py-3 px-4 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+          className="btn-primary flex-1"
         >
           Continue
           <ArrowRight className="w-4 h-4" />

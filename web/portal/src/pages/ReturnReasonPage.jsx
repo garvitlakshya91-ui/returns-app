@@ -52,7 +52,7 @@ export default function ReturnReasonPage({ data, update }) {
 
       <div className="space-y-6 mb-8">
         {items.map((item) => (
-          <div key={item.id} className="bg-white rounded-lg border border-gray-200 p-4">
+          <div key={item.id} className="card p-4">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-12 h-12 bg-gray-100 rounded flex items-center justify-center text-gray-400 text-xs shrink-0">
                 {item.imageUrl ? (
@@ -72,7 +72,7 @@ export default function ReturnReasonPage({ data, update }) {
             <select
               value={reasons[item.id]?.reason || ''}
               onChange={(e) => setItemReason(item.id, e.target.value)}
-              className="w-full px-3 py-2.5 rounded-lg border border-gray-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm mb-3"
+              className="field !py-2.5 text-sm mb-3"
             >
               <option value="">Select a reason...</option>
               {RETURN_REASONS.map((r) => (
@@ -91,7 +91,7 @@ export default function ReturnReasonPage({ data, update }) {
                   onChange={(e) => setItemDetail(item.id, e.target.value)}
                   placeholder="Any extra information..."
                   rows={2}
-                  className="w-full px-3 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm mb-3 resize-none"
+                  className="field !py-2 text-sm mb-3 resize-none"
                 />
 
                 {/* Photo upload */}
@@ -112,7 +112,7 @@ export default function ReturnReasonPage({ data, update }) {
         <button
           type="button"
           onClick={() => navigate(`/${shopSlug}/select-items`)}
-          className="flex-1 py-3 px-4 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
+          className="btn-secondary flex-1"
         >
           <ArrowLeft className="w-4 h-4" />
           Back
@@ -121,7 +121,7 @@ export default function ReturnReasonPage({ data, update }) {
           type="button"
           onClick={handleNext}
           disabled={!allReasoned}
-          className="flex-1 py-3 px-4 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+          className="btn-primary flex-1"
         >
           Continue
           <ArrowRight className="w-4 h-4" />

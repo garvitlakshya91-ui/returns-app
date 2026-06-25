@@ -84,16 +84,18 @@ export default function ConfirmationPage({ data }) {
       <div>
         <ProgressStepper currentStep={6} />
 
-        <div className="text-center py-8">
-          <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-4" />
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">Return Submitted!</h1>
-          <p className="text-gray-500 mb-6">
-            We've received your return request. You'll get an email with your shipping label shortly.
+        <div className="text-center py-6">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-green-100 flex items-center justify-center">
+            <CheckCircle className="w-9 h-9 text-green-600" />
+          </div>
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">Return submitted</h1>
+          <p className="text-gray-500 mb-6 max-w-xs mx-auto">
+            We've received your request. You'll get an email with your shipping label shortly.
           </p>
 
-          <div className="bg-white border border-gray-200 rounded-lg p-4 text-left mb-6">
-            <p className="text-sm text-gray-500">Return ID</p>
-            <p className="font-mono text-lg font-medium text-gray-900">{result.id || 'RF-PENDING'}</p>
+          <div className="card p-4 text-left mb-6">
+            <p className="text-xs uppercase tracking-wide text-gray-400 mb-1">Return reference</p>
+            <p className="font-mono text-lg font-semibold text-gray-900">{result.id || 'RF-PENDING'}</p>
           </div>
 
           <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4 text-left text-sm">
@@ -120,7 +122,7 @@ export default function ConfirmationPage({ data }) {
       </div>
 
       {/* Items summary */}
-      <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4">
+      <div className="card p-4 mb-4">
         <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
           <Package className="w-4 h-4" />
           Items ({items.length})
@@ -145,7 +147,7 @@ export default function ConfirmationPage({ data }) {
       </div>
 
       {/* Resolution */}
-      <div className="bg-white border border-gray-200 rounded-lg p-4 mb-4">
+      <div className="card p-4 mb-4">
         <h2 className="text-sm font-semibold text-gray-700 mb-1 flex items-center gap-2">
           <CreditCard className="w-4 h-4" />
           Resolution
@@ -155,7 +157,7 @@ export default function ConfirmationPage({ data }) {
 
       {/* Drop-off */}
       {data.dropoff && (
-        <div className="bg-white border border-gray-200 rounded-lg p-4 mb-8">
+        <div className="card p-4 mb-8">
           <h2 className="text-sm font-semibold text-gray-700 mb-1 flex items-center gap-2">
             <MapPin className="w-4 h-4" />
             Drop-off location
@@ -175,7 +177,7 @@ export default function ConfirmationPage({ data }) {
         type="button"
         onClick={handleSubmit}
         disabled={loading}
-        className="w-full py-3 px-4 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+        className="btn-primary"
       >
         {loading ? (
           <>

@@ -17,11 +17,8 @@ export default function DropoffMap({ locations = [], selected, onSelect }) {
           key={loc.id}
           type="button"
           onClick={() => onSelect(loc)}
-          className={`w-full text-left p-4 rounded-lg border-2 transition-all
-            ${selected?.id === loc.id
-              ? 'border-indigo-600 bg-indigo-50'
-              : 'border-gray-200 bg-white hover:border-gray-300'}
-          `}
+          aria-pressed={selected?.id === loc.id}
+          className={`option-card ${selected?.id === loc.id ? 'option-card-active' : 'option-card-idle'}`}
         >
           <div className="flex items-start gap-3">
             <MapPin className={`w-5 h-5 shrink-0 mt-0.5 ${selected?.id === loc.id ? 'text-indigo-600' : 'text-gray-400'}`} />

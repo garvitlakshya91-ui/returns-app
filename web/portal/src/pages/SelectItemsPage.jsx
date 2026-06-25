@@ -21,7 +21,7 @@ export default function SelectItemsPage({ data, update }) {
         <button
           type="button"
           onClick={() => navigate(`/${shopSlug || ''}`)}
-          className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+          className="btn-primary !w-auto px-6"
         >
           Back to lookup
         </button>
@@ -65,8 +65,8 @@ export default function SelectItemsPage({ data, update }) {
       </div>
 
       {selected.length > 0 && (
-        <div className="bg-gray-50 rounded-lg p-3 mb-6 text-sm text-gray-600">
-          <span className="font-medium text-gray-900">{selected.length} item{selected.length !== 1 ? 's' : ''}</span>
+        <div className="rounded-xl bg-indigo-50/70 border border-indigo-100 px-4 py-3 mb-6 text-sm text-gray-600">
+          <span className="font-semibold text-gray-900">{selected.length} item{selected.length !== 1 ? 's' : ''}</span>
           {' '}selected — Total: {'\u00A3'}{selected.reduce((sum, item) => sum + Number(item.price) * item.quantity, 0).toFixed(2)}
         </div>
       )}
@@ -75,7 +75,7 @@ export default function SelectItemsPage({ data, update }) {
         <button
           type="button"
           onClick={() => navigate(`/${shopSlug || ''}`)}
-          className="flex-1 py-3 px-4 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
+          className="btn-secondary flex-1"
         >
           <ArrowLeft className="w-4 h-4" />
           Back
@@ -84,7 +84,7 @@ export default function SelectItemsPage({ data, update }) {
           type="button"
           onClick={handleNext}
           disabled={selected.length === 0}
-          className="flex-1 py-3 px-4 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+          className="btn-primary flex-1"
         >
           Continue
           <ArrowRight className="w-4 h-4" />

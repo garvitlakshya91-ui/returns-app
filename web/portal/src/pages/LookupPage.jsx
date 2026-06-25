@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Search, AlertCircle } from 'lucide-react';
+import { Search, AlertCircle, Package } from 'lucide-react';
 import ProgressStepper from '../components/ProgressStepper';
 import { lookupOrder } from '../api';
 
@@ -43,14 +43,19 @@ export default function LookupPage({ data, update }) {
     <div>
       <ProgressStepper currentStep={1} />
 
-      <div className="text-center mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">Start a Return</h1>
-        <p className="text-gray-500 mt-1">Enter your details to find your order</p>
+      <div className="text-center mb-7">
+        <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 flex items-center justify-center shadow-md shadow-indigo-600/25">
+          <Package className="w-7 h-7 text-white" />
+        </div>
+        <h1 className="text-2xl font-bold text-gray-900">Start a return</h1>
+        <p className="text-gray-500 mt-1.5 max-w-xs mx-auto">
+          Enter your email and order number to begin — it only takes a minute.
+        </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmit} className="card p-5 sm:p-6 space-y-4">
         <div>
-          <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+          <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1.5">
             Email address
           </label>
           <input
@@ -60,12 +65,12 @@ export default function LookupPage({ data, update }) {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@example.com"
-            className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-shadow"
+            className="field"
           />
         </div>
 
         <div>
-          <label htmlFor="order" className="block text-sm font-medium text-gray-700 mb-1">
+          <label htmlFor="order" className="block text-sm font-medium text-gray-700 mb-1.5">
             Order number
           </label>
           <input
@@ -75,28 +80,27 @@ export default function LookupPage({ data, update }) {
             value={orderNumber}
             onChange={(e) => setOrderNumber(e.target.value)}
             placeholder="#1001"
-            className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-shadow"
+            className="field"
           />
+          <p className="text-xs text-gray-400 mt-1.5">
+            You'll find this in your order confirmation email.
+          </p>
         </div>
 
         {error && (
-          <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 text-red-700 text-sm">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            {error}
+          <div className="flex items-start gap-2 p-3 rounded-xl bg-red-50 text-red-700 text-sm">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{error}</span>
           </div>
         )}
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="w-full py-3 px-4 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
-        >
+        <button type="submit" disabled={loading} className="btn-primary">
           {loading ? (
             <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
           ) : (
             <>
               <Search className="w-4 h-4" />
-              Find My Order
+              Find my order
             </>
           )}
         </button>

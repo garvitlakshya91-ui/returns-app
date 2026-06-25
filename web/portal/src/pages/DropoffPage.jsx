@@ -60,12 +60,12 @@ export default function DropoffPage({ data, update }) {
           value={postcode}
           onChange={(e) => setPostcode(e.target.value)}
           placeholder="Enter postcode (e.g. GL1 1DQ)"
-          className="flex-1 px-4 py-2.5 rounded-lg border border-gray-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none text-sm"
+          className="field flex-1 !py-2.5 text-sm"
         />
         <button
           type="submit"
           disabled={!postcode.trim() || loading}
-          className="px-4 py-2.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+          className="btn-primary !w-auto px-4 !py-2.5"
         >
           {loading ? (
             <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -91,7 +91,7 @@ export default function DropoffPage({ data, update }) {
         <button
           type="button"
           onClick={() => navigate(`/${shopSlug}/resolution`)}
-          className="flex-1 py-3 px-4 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
+          className="btn-secondary flex-1"
         >
           <ArrowLeft className="w-4 h-4" />
           Back
@@ -100,7 +100,7 @@ export default function DropoffPage({ data, update }) {
           type="button"
           onClick={handleNext}
           disabled={!selected}
-          className="flex-1 py-3 px-4 bg-indigo-600 text-white font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+          className="btn-primary flex-1"
         >
           Continue
           <ArrowRight className="w-4 h-4" />

@@ -186,6 +186,8 @@ app.get('/health', async (req, res) => {
 });
 
 // ─── Routes ───
+// Public legal pages — required for the Shopify App Store listing.
+app.use('/', require('./routes/legal'));
 app.use('/', require('./routes/auth'));
 
 // Stripe webhook must be mounted BEFORE the generic /webhooks router so it

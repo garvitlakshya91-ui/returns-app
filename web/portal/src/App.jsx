@@ -8,21 +8,25 @@ import DropoffPage from './pages/DropoffPage';
 import ConfirmationPage from './pages/ConfirmationPage';
 import ReturnStatusPage from './pages/ReturnStatusPage';
 import PortalLayout from './components/PortalLayout';
+import { isDemo, DEMO_DATA } from './demoSeed';
+
+const EMPTY_DATA = {
+  shopId: null,
+  shopName: '',
+  shopSlug: '',
+  order: null,
+  selectedItems: [],
+  reasons: {},
+  photos: {},
+  resolution: null,
+  carrier: null,
+  dropoff: null,
+  returnResult: null,
+};
 
 export default function App() {
-  const [returnData, setReturnData] = useState({
-    shopId: null,
-    shopName: '',
-    shopSlug: '',
-    order: null,
-    selectedItems: [],
-    reasons: {},
-    photos: {},
-    resolution: null,
-    carrier: null,
-    dropoff: null,
-    returnResult: null,
-  });
+  // Seed mock data only when ?demo=1 is present (screenshots/demos); never in prod.
+  const [returnData, setReturnData] = useState(isDemo() ? DEMO_DATA : EMPTY_DATA);
 
   function updateReturnData(updates) {
     setReturnData((prev) => ({ ...prev, ...updates }));

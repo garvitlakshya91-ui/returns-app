@@ -21,7 +21,7 @@ Three surfaces, one Node deployable:
 2. **Merchant dashboard** — a React + Shopify Polaris app embedded in Shopify Admin.
    Returns list, detail, approve/reject/process, analytics, policies, settings.
 3. **Webhook handler** — HMAC-verified Shopify webhooks (order sync, app lifecycle,
-   GDPR) plus a signed Stripe webhook for paid returns.
+   billing subscription updates, GDPR).
 
 ## Architecture
 
@@ -45,7 +45,7 @@ Three surfaces, one Node deployable:
 | Cache / queue | Upstash Redis + BullMQ |
 | Storage | Cloudflare R2 (photos, labels, QR codes) |
 | Email | Resend + React Email templates |
-| Payments | Stripe (paid returns) |
+| Billing | Shopify Billing API (subscriptions) |
 | Frontend | React 19 — Polaris (merchant) · Tailwind (portal) |
 | Monitoring | Sentry |
 | Hosting / CI | Railway · GitHub Actions |
@@ -108,10 +108,10 @@ npm test                # 169 tests
 npm run test:coverage
 ```
 
-Covers utils (encryption, hmac, currency), services (policy, returns, refunds,
-exchanges, stripe, labels, notifications, analytics), middleware (auth, plan
-gating), and routes (portal, admin, Shopify + Stripe webhooks) with all external
-services mocked at the module boundary.
+Covers utils (encryption, hmac, currency, fees), services (policy, returns, refunds,
+exchanges, billing, labels, notifications, analytics), middleware (auth, plan
+gating), and routes (portal, admin, carriers, billing, Shopify webhooks) with all
+external services mocked at the module boundary.
 
 ## Pricing plans
 

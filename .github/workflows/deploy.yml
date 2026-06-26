@@ -43,4 +43,5 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: railway up --ci
+        # The project has more than one service, so name the target explicitly.
+        run: railway up --ci --service web

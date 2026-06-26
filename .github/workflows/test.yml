@@ -9,6 +9,12 @@ on:
 jobs:
   jest:
     runs-on: ubuntu-latest
+    # Dummy connection strings so `prisma validate`/`generate` can resolve the
+    # datasource env() references. No real database is contacted — every Prisma
+    # call in the suite is mocked at the module boundary.
+    env:
+      DATABASE_URL: "postgresql://user:pass@localhost:5432/db?schema=public"
+      DIRECT_URL: "postgresql://user:pass@localhost:5432/db?schema=public"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

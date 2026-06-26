@@ -39,8 +39,12 @@ jobs:
           node-version: '20'
           cache: npm
           cache-dependency-path: web/merchant/package-lock.json
+      # `npm ci` (not `install`) so optional native deps are installed strictly
+      # per the lockfile for THIS platform. Plain `npm install` against a
+      # lockfile generated on another OS hits npm's cross-platform optional-dep
+      # bug and skips the Linux rolldown/vite binary.
       - name: Install merchant deps
-        run: npm install --legacy-peer-deps
+        run: npm ci --legacy-peer-deps
         working-directory: web/merchant
       - name: Build merchant SPA
         run: npm run build

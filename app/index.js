@@ -255,6 +255,13 @@ app.get('/portal/*splat', (req, res) => res.sendFile(path.join(portalDist, 'inde
 app.get(['/admin', '/admin/'], sendMerchantHtml);
 app.get('/admin/*splat', sendMerchantHtml);
 
+// The embedded merchant SPA uses root-relative client routes (/returns,
+// /settings, …). Shopify reconstructs the iframe URL at those paths on a
+// hard reload or deep link, so serve the app HTML for them too — otherwise
+// the server 404s ("Cannot GET /settings") and the embed breaks on refresh.
+app.get(['/returns', '/analytics', '/policies', '/settings'], sendMerchantHtml);
+app.get('/returns/*splat', sendMerchantHtml);
+
 // Root: send Shopify embeds to /admin, everyone else to /portal
 app.get('/', (req, res) => {
   if (req.query.shop) return res.redirect(`/admin?shop=${req.query.shop}&host=${req.query.host || ''}`);

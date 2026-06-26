@@ -4,3 +4,8 @@ dist/
 *.log
 .DS_Store
 coverage/
+
+# Merchant lockfile is not committed — see .github/workflows/test.yml.
+# A Windows-generated lockfile omits Linux native binaries (rolldown/vite),
+# breaking CI/Railway builds. npm install resolves per-platform instead.
+web/merchant/package-lock.json

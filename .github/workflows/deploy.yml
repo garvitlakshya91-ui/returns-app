@@ -1,18 +1,16 @@
 name: deploy
 
-# Runs only after the `test` workflow on `main` succeeds. Pushes a fresh
-# Railway build using the CLI. Requires three GitHub repository secrets:
+# Runs after the `test` workflow on `main` succeeds and deploys to Railway via
+# the CLI. Requires ONE GitHub repository secret:
 #
-#   RAILWAY_TOKEN   — `railway login` → `railway tokens new` (or
-#                     Railway dashboard → Account Settings → Tokens).
-#   RAILWAY_PROJECT — the Railway project id (printable via
-#                     `railway status --json | jq .projectId`).
-#   RAILWAY_SERVICE — the Railway service id within that project (same
-#                     command, `.serviceId`).
+#   RAILWAY_TOKEN — a Railway *project* token scoped to the production
+#                   environment (Railway → project → Settings → Tokens).
+#                   A project token implies the project + environment, so no
+#                   project/service ids are needed. With a single service in
+#                   the project, `railway up` deploys it unambiguously.
 #
-# If RAILWAY_TOKEN isn't set, the job exits cleanly with a "skipped"
-# message — pushing to main doesn't fail just because deploy isn't
-# wired yet.
+# If RAILWAY_TOKEN isn't set, the job exits cleanly with a "skipped" notice —
+# pushing to main doesn't fail just because deploy isn't wired yet.
 
 on:
   workflow_run:
@@ -45,7 +43,4 @@ jobs:
         if: steps.check.outputs.skip != 'true'
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          railway up --service "${{ secrets.RAILWAY_SERVICE }}" \
-                     --project "${{ secrets.RAILWAY_PROJECT }}" \
-                     --ci
+        run: railway up --ci

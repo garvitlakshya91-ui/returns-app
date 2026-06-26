@@ -81,10 +81,11 @@ describe('Mock adapter outputs', () => {
     expect(typeof label.cost).toBe('number');
   });
 
-  it('Royal Mail mock generates an RM-prefixed tracking code', async () => {
+  it('Royal Mail simulation generates a tracked-style tracking code', async () => {
     const adapter = LabelService.getCarrierAdapter(shopWith('royalmail'), 'royalmail');
     const label = await adapter.generateLabel({});
-    expect(label.trackingCode).toMatch(/^RM[A-F0-9]+/);
+    expect(label.trackingCode).toMatch(/^RF\d{9}GB$/);
+    expect(label.simulated).toBe(true);
   });
 
   it('Evri dropoff lookup returns three ParcelShops keyed to the postcode', async () => {

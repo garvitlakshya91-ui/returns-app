@@ -52,6 +52,7 @@ export default function CarrierConnectCard({ plan = 'FREE', onChange }) {
   const [loading, setLoading] = useState(true);
   const [banner, setBanner] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [videoOpen, setVideoOpen] = useState(false);
 
   // Bring-your-own modal state
   const [active, setActive] = useState(null);
@@ -173,6 +174,9 @@ export default function CarrierConnectCard({ plan = 'FREE', onChange }) {
                 Generate return labels automatically — no carrier account or API keys needed.
                 Powered by ReturnFlow's carrier network.
               </Text>
+              <div>
+                <Button variant="plain" onClick={() => setVideoOpen(true)}>▶ How managed labels work</Button>
+              </div>
             </BlockStack>
             <Button
               variant={managedActive ? undefined : 'primary'}
@@ -275,6 +279,29 @@ export default function CarrierConnectCard({ plan = 'FREE', onChange }) {
           </Modal.Section>
         </Modal>
       )}
+
+      {/* "How managed labels work" explainer */}
+      <Modal
+        open={videoOpen}
+        onClose={() => setVideoOpen(false)}
+        title="How managed return labels work"
+        secondaryActions={[{ content: 'Close', onAction: () => setVideoOpen(false) }]}
+        large
+      >
+        {videoOpen && (
+          <Modal.Section>
+            <div style={{ position: 'relative', paddingTop: '56.25%', borderRadius: 8, overflow: 'hidden', background: '#faf9f5' }}>
+              <iframe
+                src="/admin/managed-labels.html"
+                title="How managed labels work"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0 }}
+              />
+            </div>
+          </Modal.Section>
+        )}
+      </Modal>
     </Card>
   );
 }

@@ -31,7 +31,7 @@ describe('GET /api/admin/billing/plans', () => {
     const res = await request(app).get('/api/admin/billing/plans');
     expect(res.status).toBe(200);
     expect(res.body.currentPlan).toBe('GROWTH');
-    expect(res.body.plans.map((p) => p.id)).toEqual(['FREE', 'STARTER', 'GROWTH', 'PRO']);
+    expect(res.body.plans.map((p) => p.id)).toEqual(['FREE', 'STARTER', 'GROWTH']);
   });
 });
 
@@ -124,7 +124,6 @@ describe('BillingService.planKeyFromName', () => {
     const BillingService = require('../../app/services/BillingService');
     expect(BillingService.planKeyFromName('ReturnFlow Growth')).toBe('GROWTH');
     expect(BillingService.planKeyFromName('returnflow starter')).toBe('STARTER');
-    expect(BillingService.planKeyFromName('Pro')).toBe('PRO');
     expect(BillingService.planKeyFromName('Unknown thing')).toBeNull();
     expect(BillingService.planKeyFromName(null)).toBeNull();
   });

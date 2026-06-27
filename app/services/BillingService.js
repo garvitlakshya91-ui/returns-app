@@ -5,11 +5,15 @@ const logger = require('../utils/logger');
 
 // Single source of truth for plan definitions. Mirrors the pricing table in
 // CLAUDE.md. `returnsPerMonth: null` means unlimited.
+//
+// Pro is intentionally NOT sold yet: its intended differentiators (fraud
+// detection, AI prediction, API access) aren't built, so it would charge more
+// than Growth for nothing. The PRO enum + PLAN_LIMITS stay in place so it can
+// be re-introduced the moment those features ship.
 const PLANS = {
   FREE:    { amount: 0,  name: 'Free',    returnsPerMonth: 30 },
   STARTER: { amount: 9,  name: 'Starter', returnsPerMonth: 150 },
   GROWTH:  { amount: 29, name: 'Growth',  returnsPerMonth: null },
-  PRO:     { amount: 49, name: 'Pro',     returnsPerMonth: null },
 };
 
 const SUBSCRIPTION_PREFIX = 'ReturnFlow';

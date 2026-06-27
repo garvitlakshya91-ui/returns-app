@@ -151,6 +151,27 @@ class LabelService {
     const adapterConfig = { credentials, settings: config?.settings || {} };
 
     switch (carrierName) {
+      case 'shipengine': {
+        // Managed labels: fall back to ReturnFlow's platform ShipEngine account
+        // (env) when the merchant hasn't supplied their own key, so they get
+        // labels with zero carrier setup. Goes live automatically once the
+        // platform env vars are set; simulates until then.
+        const ShipEngineAdapter = require('./carriers/ShipEngineAdapter');
+        const seSettings = config?.settings || {};
+        const apiKey = credentials.apiKey || process.env.SHIPENGINE_API_KEY || null;
+        const seCarrierId = seSettings.carrierId || process.env.SHIPENGINE_CARRIER_ID || null;
+        const seServiceCode = seSettings.serviceCode || process.env.SHIPENGINE_SERVICE_CODE || null;
+        return new ShipEngineAdapter({
+          credentials: { apiKey },
+          settings: {
+            ...seSettings,
+            carrierId: seCarrierId,
+            serviceCode: seServiceCode,
+            live: Boolean(apiKey && seCarrierId),
+            carrierLabel: seSettings.carrierLabel || 'royalmail',
+          },
+        });
+      }
       case 'royalmail': {
         const RoyalMailAdapter = require('./carriers/RoyalMailAdapter');
         return new RoyalMailAdapter(adapterConfig);

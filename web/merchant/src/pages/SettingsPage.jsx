@@ -8,11 +8,13 @@ import {
   TextField,
   Button,
   Banner,
-  Spinner,
   Select,
+  SkeletonPage,
+  SkeletonBodyText,
 } from '@shopify/polaris';
 import { settingsApi } from '../api';
 import CarrierConnectCard from '../components/CarrierConnectCard';
+import AppFooter from '../components/AppFooter';
 
 export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
@@ -55,11 +57,16 @@ export default function SettingsPage() {
 
   if (loading) {
     return (
-      <Page title="Settings">
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}>
-          <Spinner size="large" />
-        </div>
-      </Page>
+      <SkeletonPage title="Settings">
+        <Layout>
+          <Layout.Section>
+            <Card><SkeletonBodyText lines={4} /></Card>
+          </Layout.Section>
+          <Layout.Section>
+            <Card><SkeletonBodyText lines={4} /></Card>
+          </Layout.Section>
+        </Layout>
+      </SkeletonPage>
     );
   }
 
@@ -178,6 +185,7 @@ export default function SettingsPage() {
           </Button>
         </Layout.Section>
       </Layout>
+      <AppFooter />
     </Page>
   );
 }

@@ -13,6 +13,7 @@ import {
   useIndexResourceState,
 } from '@shopify/polaris';
 import ReturnStatusBadge from '../components/ReturnStatusBadge';
+import AppFooter from '../components/AppFooter';
 import { returnsApi } from '../api';
 
 const STATUS_OPTIONS = [
@@ -195,6 +196,7 @@ export default function ReturnsListPage() {
           </>
         )}
       </Card>
+      <AppFooter />
     </Page>
   );
 }

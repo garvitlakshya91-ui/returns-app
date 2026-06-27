@@ -7,13 +7,14 @@ import {
   BlockStack,
   InlineStack,
   Button,
-  Spinner,
   Select,
   DataTable,
   EmptyState,
   Banner,
   Badge,
   Box,
+  SkeletonPage,
+  SkeletonBodyText,
 } from '@shopify/polaris';
 import {
   LineChart,
@@ -28,7 +29,26 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import MetricCard from '../components/MetricCard';
-import { analyticsApi } from '../api';
+import AppFooter from '../components/AppFooter';
+import { analyticsApi, billingApi } from '../api';
+
+// Shown as a blurred teaser when a shop's plan doesn't include analytics, so
+// the page demonstrates the feature's value instead of looking like broken
+// zeros. Clearly labelled "Sample data" so it's never mistaken for real.
+const SAMPLE_SUMMARY = {
+  totalReturns: 128, pendingReturns: 9, processedReturns: 102, rejectedReturns: 5,
+  totalValue: 4820, refundedValue: 2960, revenueRetained: 1860,
+};
+const SAMPLE_TREND = Array.from({ length: 14 }, (_, i) => ({
+  date: `2026-06-${String(9 + i).padStart(2, '0')}`,
+  count: [4, 7, 5, 9, 6, 11, 8, 6, 12, 9, 13, 7, 10, 11][i],
+  value: [140, 260, 180, 320, 220, 410, 300, 220, 460, 330, 480, 260, 360, 410][i],
+}));
+const SAMPLE_SKUS = [
+  { sku: 'MWJ-M-GRN', productTitle: 'Merino Wool Jumper', totalReturns: 18, totalQuantity: 20, reasonBreakdown: { doesnt_fit: 11, damaged: 7 } },
+  { sku: 'CTB-NAT', productTitle: 'Canvas Tote Bag', totalReturns: 11, totalQuantity: 12, reasonBreakdown: { changed_mind: 7, not_as_described: 4 } },
+  { sku: 'DNM-32-IND', productTitle: 'Selvedge Denim', totalReturns: 8, totalQuantity: 8, reasonBreakdown: { doesnt_fit: 8 } },
+];
 
 const RANGE_OPTIONS = [
   { label: 'Last 7 days', value: '7' },
@@ -63,6 +83,8 @@ export default function AnalyticsPage() {
   const [trend, setTrend] = useState([]);
   const [skus, setSkus] = useState([]);
   const [error, setError] = useState(null);
+  const [locked, setLocked] = useState(false);
+  const [upgrading, setUpgrading] = useState(false);
 
   const loadAnalytics = useCallback(async () => {
     setLoading(true);
@@ -73,13 +95,19 @@ export default function AnalyticsPage() {
         analyticsApi.trend(Number(days)),
         analyticsApi.skus(10),
       ]);
+      setLocked(false);
       setSummary(summaryData);
       setTrend(trendData.map((d) => ({ ...d, label: formatDateShort(d.date) })));
       setSkus(skuData);
     } catch (err) {
       console.error('Analytics load error:', err);
-      if (err.message?.toLowerCase().includes('growth')) {
-        setError('Full analytics require a Growth plan or higher. Upgrade to unlock.');
+      if (err.message?.toLowerCase().includes('growth') || err.message?.toLowerCase().includes('upgrade')) {
+        // Plan-gated: show the feature as a labelled sample so it reads as a
+        // locked feature, not a broken page.
+        setLocked(true);
+        setSummary(SAMPLE_SUMMARY);
+        setTrend(SAMPLE_TREND.map((d) => ({ ...d, label: formatDateShort(d.date) })));
+        setSkus(SAMPLE_SKUS);
       } else {
         setError('Failed to load analytics. Please try again.');
       }
@@ -87,6 +115,23 @@ export default function AnalyticsPage() {
       setLoading(false);
     }
   }, [days]);
+
+  async function handleUpgrade() {
+    setUpgrading(true);
+    try {
+      const { confirmationUrl } = await billingApi.subscribe('GROWTH');
+      if (confirmationUrl) {
+        // Break out of the embedded iframe to Shopify's approval screen.
+        if (window.top) window.top.location.href = confirmationUrl;
+        else window.location.href = confirmationUrl;
+      }
+    } catch (err) {
+      console.error('Upgrade error:', err);
+      setError('Could not start the upgrade. Please try again.');
+    } finally {
+      setUpgrading(false);
+    }
+  }
 
   useEffect(() => {
     loadAnalytics();
@@ -98,11 +143,16 @@ export default function AnalyticsPage() {
 
   if (loading) {
     return (
-      <Page title="Analytics">
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}>
-          <Spinner size="large" />
-        </div>
-      </Page>
+      <SkeletonPage title="Analytics">
+        <Layout>
+          <Layout.Section>
+            <Card><SkeletonBodyText lines={3} /></Card>
+          </Layout.Section>
+          <Layout.Section>
+            <Card><SkeletonBodyText lines={6} /></Card>
+          </Layout.Section>
+        </Layout>
+      </SkeletonPage>
     );
   }
 
@@ -137,10 +187,7 @@ export default function AnalyticsPage() {
   return (
     <Page
       title="Analytics"
-      primaryAction={{
-        content: 'Export CSV',
-        onAction: handleExport,
-      }}
+      primaryAction={locked ? undefined : { content: 'Export CSV', onAction: handleExport }}
       secondaryActions={[
         {
           content: 'Refresh',
@@ -157,10 +204,25 @@ export default function AnalyticsPage() {
           </Layout.Section>
         )}
 
+        {locked && (
+          <Layout.Section>
+            <Banner
+              tone="info"
+              title="Unlock analytics with Growth"
+              action={{ content: 'Upgrade to Growth — £29/mo', onAction: handleUpgrade, loading: upgrading }}
+            >
+              <p>See your real return rate, top returned products, reason breakdowns and revenue retained. The figures below are sample data.</p>
+            </Banner>
+          </Layout.Section>
+        )}
+
         <Layout.Section>
           <Card>
             <InlineStack align="space-between" blockAlign="center">
-              <Text variant="headingMd" as="h2">Overview</Text>
+              <InlineStack gap="200" blockAlign="center">
+                <Text variant="headingMd" as="h2">Overview</Text>
+                {locked && <Badge tone="info">Sample data</Badge>}
+              </InlineStack>
               <div style={{ minWidth: 180 }}>
                 <Select
                   label="Time range"
@@ -323,6 +385,7 @@ export default function AnalyticsPage() {
           </InlineStack>
         </Layout.Section>
       </Layout>
+      <AppFooter />
     </Page>
   );
 }

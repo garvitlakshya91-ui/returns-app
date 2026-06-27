@@ -8,14 +8,16 @@ import {
   BlockStack,
   InlineStack,
   Button,
-  Spinner,
   DataTable,
   EmptyState,
+  SkeletonPage,
+  SkeletonBodyText,
 } from '@shopify/polaris';
 import { OrderIcon, ClockIcon, CheckCircleIcon, CashDollarIcon } from '@shopify/polaris-icons';
 import MetricCard from '../components/MetricCard';
 import ReturnStatusBadge from '../components/ReturnStatusBadge';
 import SetupGuide from '../components/SetupGuide';
+import AppFooter from '../components/AppFooter';
 import { returnsApi } from '../api';
 
 export default function DashboardPage() {
@@ -51,11 +53,16 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <Page title="Dashboard">
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '60px' }}>
-          <Spinner size="large" />
-        </div>
-      </Page>
+      <SkeletonPage title="Dashboard">
+        <Layout>
+          <Layout.Section>
+            <Card><SkeletonBodyText lines={2} /></Card>
+          </Layout.Section>
+          <Layout.Section>
+            <Card><SkeletonBodyText lines={5} /></Card>
+          </Layout.Section>
+        </Layout>
+      </SkeletonPage>
     );
   }
 
@@ -120,6 +127,7 @@ export default function DashboardPage() {
           </Card>
         </Layout.Section>
       </Layout>
+      <AppFooter />
     </Page>
   );
 }

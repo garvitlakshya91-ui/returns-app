@@ -55,6 +55,27 @@ describe('POST /api/admin/billing/subscribe — paid plan', () => {
     const res = await request(app).post('/api/admin/billing/subscribe').send({ plan: 'STARTER' });
     expect(res.status).toBe(200);
     expect(res.body.confirmationUrl).toBe('https://shop/confirm/123');
+
+    // Monthly by default, with a free trial.
+    const vars = shopifyClient.request.mock.calls[0][1].variables;
+    expect(vars.trialDays).toBe(14);
+    expect(vars.name).toBe('ReturnFlow Starter');
+    expect(vars.lineItems[0].plan.appRecurringPricingDetails.interval).toBe('EVERY_30_DAYS');
+  });
+
+  it('supports annual billing (2 months free) with a trial', async () => {
+    shopifyClient.request.mockResolvedValue({
+      data: { appSubscriptionCreate: { confirmationUrl: 'https://shop/confirm/a', appSubscription: { id: '1', status: 'PENDING' }, userErrors: [] } },
+    });
+
+    await request(app).post('/api/admin/billing/subscribe').send({ plan: 'GROWTH', interval: 'annual' });
+
+    const vars = shopifyClient.request.mock.calls[0][1].variables;
+    expect(vars.name).toBe('ReturnFlow Growth (Annual)');
+    expect(vars.trialDays).toBe(14);
+    const pricing = vars.lineItems[0].plan.appRecurringPricingDetails;
+    expect(pricing.interval).toBe('ANNUAL');
+    expect(pricing.price.amount).toBe(290); // £29 × 10
   });
 });
 

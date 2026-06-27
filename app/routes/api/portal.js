@@ -64,7 +64,7 @@ router.post('/lookup', lookupLimiter, async (req, res) => {
                     id title variantTitle quantity sku
                     originalUnitPriceSet { shopMoney { amount } }
                     image { url }
-                    product { id }
+                    product { id tags collections(first: 10) { edges { node { handle } } } }
                     variant { id }
                   }
                 }
@@ -94,8 +94,8 @@ router.post('/lookup', lookupLimiter, async (req, res) => {
     for (const item of lineItems) {
       const eligibility = await PolicyEngine.evaluateEligibility(shop.id, {
         price: Number(item.originalUnitPriceSet.shopMoney.amount),
-        tags: [],
-        collections: [],
+        tags: item.product?.tags || [],
+        collections: (item.product?.collections?.edges || []).map((e) => e.node.handle),
       }, fulfilledAt);
 
       if (eligibility.eligible) {

@@ -73,9 +73,9 @@ export const analyticsApi = {
 
 export const billingApi = {
   plans: () => apiFetch('/billing/plans'),
-  subscribe: (plan) => apiFetch('/billing/subscribe', {
+  subscribe: (plan, interval) => apiFetch('/billing/subscribe', {
     method: 'POST',
-    body: JSON.stringify({ plan }),
+    body: JSON.stringify({ plan, interval }),
   }),
   confirm: (plan) => apiFetch('/billing/confirm', {
     method: 'POST',

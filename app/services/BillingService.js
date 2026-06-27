@@ -18,18 +18,28 @@ const PLANS = {
 
 const SUBSCRIPTION_PREFIX = 'ReturnFlow';
 
-/** Subscription name we register on Shopify for a given plan key. */
-function subscriptionName(planKey) {
-  return `${SUBSCRIPTION_PREFIX} ${PLANS[planKey].name}`;
+// Paid plans get a free trial; annual billing is ~2 months free (×10/yr).
+const TRIAL_DAYS = 14;
+function annualAmount(planKey) {
+  return Math.round((PLANS[planKey]?.amount || 0) * 10 * 100) / 100;
+}
+
+/** Subscription name we register on Shopify for a given plan + interval. */
+function subscriptionName(planKey, interval = 'monthly') {
+  return `${SUBSCRIPTION_PREFIX} ${PLANS[planKey].name}${interval === 'annual' ? ' (Annual)' : ''}`;
 }
 
 /**
- * Map a Shopify subscription name back to a plan key.
- * Tolerant of casing and a missing "ReturnFlow" prefix.
+ * Map a Shopify subscription name back to a plan key. Tolerant of casing, a
+ * missing "ReturnFlow" prefix, and an "(Annual)" suffix.
  */
 function planKeyFromName(name) {
   if (!name) return null;
-  const cleaned = String(name).replace(new RegExp(`^${SUBSCRIPTION_PREFIX}\\s*`, 'i'), '').trim().toLowerCase();
+  const cleaned = String(name)
+    .replace(new RegExp(`^${SUBSCRIPTION_PREFIX}\\s*`, 'i'), '')
+    .replace(/\s*\(annual\)\s*$/i, '')
+    .trim()
+    .toLowerCase();
   const entry = Object.entries(PLANS).find(([, p]) => p.name.toLowerCase() === cleaned);
   return entry ? entry[0] : null;
 }
@@ -103,6 +113,8 @@ async function applySubscriptionStatus(shopDomain, { name, status }) {
 
 module.exports = {
   PLANS,
+  TRIAL_DAYS,
+  annualAmount,
   subscriptionName,
   planKeyFromName,
   graphqlClient,

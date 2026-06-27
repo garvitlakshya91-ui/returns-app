@@ -15,7 +15,12 @@ router.use(verifyShopifySession);
 router.get('/plans', (req, res) => {
   res.json({
     currentPlan: req.shop.plan,
-    plans: Object.entries(PLANS).map(([key, p]) => ({ id: key, ...p })),
+    trialDays: BillingService.TRIAL_DAYS,
+    plans: Object.entries(PLANS).map(([key, p]) => ({
+      id: key,
+      ...p,
+      annualAmount: BillingService.annualAmount(key),
+    })),
   });
 });
 
@@ -27,10 +32,11 @@ router.get('/plans', (req, res) => {
  */
 router.post('/subscribe', async (req, res) => {
   try {
-    const { plan } = req.body;
+    const { plan, interval = 'monthly' } = req.body;
     if (!PLANS[plan]) {
       return res.status(400).json({ error: 'Invalid plan' });
     }
+    const isAnnual = interval === 'annual';
 
     const client = BillingService.graphqlClient(req.shop);
 
@@ -49,17 +55,22 @@ router.post('/subscribe', async (req, res) => {
 
     // ── Upgrade / change paid plan ──
     const planConfig = PLANS[plan];
+    const price = isAnnual ? BillingService.annualAmount(plan) : planConfig.amount;
+    const billingInterval = isAnnual ? 'ANNUAL' : 'EVERY_30_DAYS';
+
     const response = await client.request(`
       mutation AppSubscriptionCreate(
         $name: String!,
         $returnUrl: URL!,
         $lineItems: [AppSubscriptionLineItemInput!]!,
+        $trialDays: Int,
         $test: Boolean
       ) {
         appSubscriptionCreate(
           name: $name,
           returnUrl: $returnUrl,
           lineItems: $lineItems,
+          trialDays: $trialDays,
           test: $test
         ) {
           confirmationUrl
@@ -69,16 +80,17 @@ router.post('/subscribe', async (req, res) => {
       }
     `, {
       variables: {
-        name: BillingService.subscriptionName(plan),
+        name: BillingService.subscriptionName(plan, interval),
         returnUrl: `${process.env.HOST}/?shop=${req.shopDomain}&billing=confirmed&plan=${plan}`,
         lineItems: [{
           plan: {
             appRecurringPricingDetails: {
-              price: { amount: planConfig.amount, currencyCode: 'GBP' },
-              interval: 'EVERY_30_DAYS',
+              price: { amount: price, currencyCode: 'GBP' },
+              interval: billingInterval,
             },
           },
         }],
+        trialDays: BillingService.TRIAL_DAYS,
         test: process.env.NODE_ENV !== 'production',
       },
     });

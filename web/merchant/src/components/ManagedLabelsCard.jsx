@@ -82,7 +82,7 @@ export default function ManagedLabelsCard({ onChange }) {
       >
         {videoOpen && (
           <Modal.Section>
-            <div style={{ width: '100%', height: 'min(70vh, 620px)', borderRadius: 8, overflow: 'hidden', background: '#faf9f5' }}>
+            <div style={{ width: '100%', height: 'calc(100vh - 230px)', borderRadius: 8, overflow: 'hidden', background: '#faf9f5' }}>
               <iframe
                 src="/admin/managed-labels.html"
                 title="How managed labels work"

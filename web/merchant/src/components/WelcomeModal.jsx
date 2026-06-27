@@ -73,7 +73,7 @@ export default function WelcomeModal() {
         {modalOpen && (
           <Modal.Section>
             <BlockStack gap="400">
-              <div style={{ width: '100%', height: 'min(70vh, 620px)', borderRadius: 8, overflow: 'hidden', background: '#4F46E5' }}>
+              <div style={{ width: '100%', height: 'calc(100vh - 230px)', borderRadius: 8, overflow: 'hidden', background: '#4F46E5' }}>
                 <iframe
                   src={embedUrl}
                   title="ReturnFlow tour"

@@ -61,6 +61,9 @@ describe('POST /api/admin/billing/subscribe — paid plan', () => {
     expect(vars.trialDays).toBe(14);
     expect(vars.name).toBe('ReturnFlow Starter');
     expect(vars.lineItems[0].plan.appRecurringPricingDetails.interval).toBe('EVERY_30_DAYS');
+    // Paid subs also carry a usage line item for managed-label billing.
+    expect(vars.lineItems).toHaveLength(2);
+    expect(vars.lineItems[1].plan.appUsagePricingDetails).toBeDefined();
   });
 
   it('supports annual billing (2 months free) with a trial', async () => {
@@ -147,5 +150,45 @@ describe('BillingService.planKeyFromName', () => {
     expect(BillingService.planKeyFromName('returnflow starter')).toBe('STARTER');
     expect(BillingService.planKeyFromName('Unknown thing')).toBeNull();
     expect(BillingService.planKeyFromName(null)).toBeNull();
+  });
+});
+
+describe('BillingService.recordLabelCharge', () => {
+  function shopObj() {
+    return fakeShop({ shopifyToken: encrypt('shpat_x'), currency: 'GBP' });
+  }
+
+  it('records a usage charge against the subscription usage line item', async () => {
+    const BillingService = require('../../app/services/BillingService');
+    shopifyClient.request
+      .mockResolvedValueOnce({
+        data: { currentAppInstallation: { activeSubscriptions: [{
+          id: 'sub_1', status: 'ACTIVE',
+          lineItems: [
+            { id: 'li_rec', plan: { pricingDetails: { __typename: 'AppRecurringPricing' } } },
+            { id: 'li_usage', plan: { pricingDetails: { __typename: 'AppUsagePricing' } } },
+          ],
+        }] } },
+      })
+      .mockResolvedValueOnce({ data: { appUsageRecordCreate: { appUsageRecord: { id: 'usage_1' }, userErrors: [] } } });
+
+    const id = await BillingService.recordLabelCharge(shopObj(), { amount: 4.7, description: 'Return label #1042' });
+    expect(id).toBe('usage_1');
+    const mutation = shopifyClient.request.mock.calls[1][1].variables;
+    expect(mutation.subscriptionLineItemId).toBe('li_usage');
+    expect(mutation.price).toEqual({ amount: 4.7, currencyCode: 'GBP' });
+  });
+
+  it('skips silently (null) when the plan has no usage line item', async () => {
+    const BillingService = require('../../app/services/BillingService');
+    shopifyClient.request.mockResolvedValueOnce({
+      data: { currentAppInstallation: { activeSubscriptions: [{
+        id: 'sub', status: 'ACTIVE',
+        lineItems: [{ id: 'li_rec', plan: { pricingDetails: { __typename: 'AppRecurringPricing' } } }],
+      }] } },
+    });
+    const id = await BillingService.recordLabelCharge(shopObj(), { amount: 4.7, description: 'x' });
+    expect(id).toBeNull();
+    expect(shopifyClient.request).toHaveBeenCalledTimes(1); // no mutation attempted
   });
 });

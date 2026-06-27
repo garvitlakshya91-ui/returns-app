@@ -24,6 +24,26 @@ function annualAmount(planKey) {
   return Math.round((PLANS[planKey]?.amount || 0) * 10 * 100) / 100;
 }
 
+// ─── Managed-label usage billing ───
+// Paid subscriptions carry a usage-pricing line item so we can bill managed
+// return labels per-label (postage + a flat service fee) on the merchant's
+// Shopify invoice. The capped amount is the monthly usage ceiling the merchant
+// approves; charges above it are rejected until they raise the cap.
+const USAGE_CAP_GBP = Number(process.env.LABEL_USAGE_CAP_GBP || 200);
+const LABEL_FEE_GBP = Number(process.env.LABEL_FEE_GBP || 0.5);
+
+/** The usage-pricing line item attached to every paid subscription. */
+function usagePricingLineItem() {
+  return {
+    plan: {
+      appUsagePricingDetails: {
+        terms: `Managed return labels: postage + £${LABEL_FEE_GBP.toFixed(2)} service fee, charged per label`,
+        cappedAmount: { amount: USAGE_CAP_GBP, currencyCode: 'GBP' },
+      },
+    },
+  };
+}
+
 /** Subscription name we register on Shopify for a given plan + interval. */
 function subscriptionName(planKey, interval = 'monthly') {
   return `${SUBSCRIPTION_PREFIX} ${PLANS[planKey].name}${interval === 'annual' ? ' (Annual)' : ''}`;
@@ -111,14 +131,80 @@ async function applySubscriptionStatus(shopDomain, { name, status }) {
   return planKey;
 }
 
+/**
+ * Find the usage-pricing line-item id on the merchant's active subscription
+ * (needed to attach per-label usage charges). Returns null if they're on a plan
+ * without a usage component (e.g. FREE), so callers can skip silently.
+ */
+async function getUsageLineItemId(client) {
+  const resp = await client.request(`
+    {
+      currentAppInstallation {
+        activeSubscriptions {
+          id status
+          lineItems { id plan { pricingDetails { __typename } } }
+        }
+      }
+    }
+  `);
+  const active = (resp.data?.currentAppInstallation?.activeSubscriptions || []).find((s) => s.status === 'ACTIVE');
+  if (!active) return null;
+  const usage = (active.lineItems || []).find((li) => li.plan?.pricingDetails?.__typename === 'AppUsagePricing');
+  return usage?.id || null;
+}
+
+/**
+ * Charge the merchant for one managed label via a Shopify usage record
+ * (postage + service fee). Non-fatal: a billing hiccup must never fail label
+ * generation, so this swallows errors and returns null.
+ */
+async function recordLabelCharge(shop, { amount, description }) {
+  try {
+    const client = graphqlClient(shop);
+    const lineItemId = await getUsageLineItemId(client);
+    if (!lineItemId) {
+      logger.info({ shop: shop.shopifyDomain }, 'No usage line item — skipping managed-label charge');
+      return null;
+    }
+    const resp = await client.request(`
+      mutation AppUsageRecordCreate($subscriptionLineItemId: ID!, $price: MoneyInput!, $description: String!) {
+        appUsageRecordCreate(subscriptionLineItemId: $subscriptionLineItemId, price: $price, description: $description) {
+          appUsageRecord { id }
+          userErrors { field message }
+        }
+      }
+    `, {
+      variables: {
+        subscriptionLineItemId: lineItemId,
+        price: { amount, currencyCode: shop.currency || 'GBP' },
+        description: String(description).slice(0, 255),
+      },
+    });
+    const errs = resp.data?.appUsageRecordCreate?.userErrors || [];
+    if (errs.length > 0) {
+      logger.warn({ shop: shop.shopifyDomain, errs }, 'Managed-label usage charge userErrors');
+      return null;
+    }
+    return resp.data?.appUsageRecordCreate?.appUsageRecord?.id || null;
+  } catch (err) {
+    logger.warn({ shop: shop.shopifyDomain, err: err.message }, 'Managed-label usage charge failed (non-fatal)');
+    return null;
+  }
+}
+
 module.exports = {
   PLANS,
   TRIAL_DAYS,
+  LABEL_FEE_GBP,
+  USAGE_CAP_GBP,
   annualAmount,
   subscriptionName,
   planKeyFromName,
+  usagePricingLineItem,
   graphqlClient,
   getActiveSubscription,
   cancelSubscription,
   applySubscriptionStatus,
+  getUsageLineItemId,
+  recordLabelCharge,
 };

@@ -24,6 +24,13 @@ class LabelService {
     const shop = returnRecord.shop;
     const adapter = LabelService.getCarrierAdapter(shop);
 
+    // Managed-platform = an aggregator carrier the merchant did NOT bring their
+    // own credentials for (so postage went through ReturnFlow's account). Those
+    // get billed back to the merchant per-label; bring-your-own carriers don't.
+    const activeConfig = (shop.carrierConfigs || []).find((c) => c.isActive);
+    const isManagedPlatform = ['shippo', 'shipengine'].includes(activeConfig?.carrier)
+      && !activeConfig?.credentials?.encrypted;
+
     const settings = shop.settings || {};
     const recipientAddress = {
       name: shop.name,
@@ -111,6 +118,17 @@ class LabelService {
         where: { id: returnId },
         data: { status: 'LABEL_SENT' },
       });
+
+      // Bill the merchant for a real managed label (postage + service fee) via
+      // a Shopify usage charge. Non-fatal and skipped for simulated labels.
+      if (isManagedPlatform && !labelResult.simulated && Number(labelResult.cost) > 0) {
+        const BillingService = require('./BillingService');
+        const charge = Math.round((Number(labelResult.cost) + BillingService.LABEL_FEE_GBP) * 100) / 100;
+        await BillingService.recordLabelCharge(shop, {
+          amount: charge,
+          description: `Return label ${labelResult.carrier || adapter.carrierName} ${returnRecord.shopifyOrderName}`,
+        });
+      }
 
       eventBus.emit(LABEL_GENERATED, { returnId, labelId: label.id });
       return label;

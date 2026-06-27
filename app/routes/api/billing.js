@@ -82,14 +82,18 @@ router.post('/subscribe', async (req, res) => {
       variables: {
         name: BillingService.subscriptionName(plan, interval),
         returnUrl: `${process.env.HOST}/?shop=${req.shopDomain}&billing=confirmed&plan=${plan}`,
-        lineItems: [{
-          plan: {
-            appRecurringPricingDetails: {
-              price: { amount: price, currencyCode: 'GBP' },
-              interval: billingInterval,
+        lineItems: [
+          {
+            plan: {
+              appRecurringPricingDetails: {
+                price: { amount: price, currencyCode: 'GBP' },
+                interval: billingInterval,
+              },
             },
           },
-        }],
+          // Usage component so managed return labels can be billed per-label.
+          BillingService.usagePricingLineItem(),
+        ],
         trialDays: BillingService.TRIAL_DAYS,
         test: process.env.NODE_ENV !== 'production',
       },

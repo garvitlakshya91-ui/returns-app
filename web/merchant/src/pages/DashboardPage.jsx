@@ -69,9 +69,11 @@ export default function DashboardPage() {
 
   return (
     <Page title="Dashboard">
-      {/* First-run welcome (plays the tour, shows once) */}
-      <WelcomeModal />
       <Layout>
+        {/* First-run welcome banner + tour (shows once) */}
+        <Layout.Section>
+          <WelcomeModal />
+        </Layout.Section>
         {/* First-run onboarding checklist (hides itself once dismissed) */}
         <Layout.Section>
           <SetupGuide />

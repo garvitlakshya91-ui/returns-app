@@ -1,11 +1,12 @@
-import { useState, useEffect, useRef } from 'react';
-import { Modal, BlockStack, InlineStack, Text, Icon } from '@shopify/polaris';
+import { useState, useEffect } from 'react';
+import { Banner, Modal, BlockStack, InlineStack, Text, Icon } from '@shopify/polaris';
 import { CheckCircleIcon } from '@shopify/polaris-icons';
 import { settingsApi } from '../api';
 
-// First-run welcome shown once per shop (flag stored in settings JSON, same
-// pattern as the Setup Guide). Plays the onboarding tour and points the
-// merchant at the setup checklist below it on the Dashboard.
+// First-run welcome shown once per shop. Rendered as a dismissible banner with
+// a "Watch the tour" button that opens the explainer modal ON CLICK — auto-
+// opening a Polaris Modal on mount is unreliable in the embedded App Bridge
+// context, whereas a user-gesture open is rock solid.
 const POINTS = [
   { t: 'A branded returns portal', d: 'Customers self-serve a return in under a minute — on a portal that looks like your store.' },
   { t: 'One-click managed labels', d: 'Real Royal Mail & Evri labels with no carrier accounts or API keys — billed per label on your Shopify invoice.' },
@@ -13,10 +14,10 @@ const POINTS = [
 ];
 
 export default function WelcomeModal() {
-  const [open, setOpen] = useState(false);
   const [settings, setSettings] = useState({});
+  const [dismissed, setDismissed] = useState(true); // hidden until loaded
+  const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const openedAt = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -25,21 +26,16 @@ export default function WelcomeModal() {
         if (!active) return;
         const s = data.settings || {};
         setSettings(s);
-        if (!s.welcomeDismissed) {
-          openedAt.current = Date.now();
-          setOpen(true);
-        }
+        setDismissed(!!s.welcomeDismissed);
       })
-      .catch(() => {});
+      .catch(() => setDismissed(true));
     return () => { active = false; };
   }, []);
 
   async function dismiss() {
-    // Embedded App Bridge can fire Modal onClose immediately on mount; ignore
-    // those spurious closes so the welcome actually stays visible.
-    if (Date.now() - openedAt.current < 700) return;
     setSaving(true);
-    setOpen(false);
+    setDismissed(true);
+    setModalOpen(false);
     try {
       await settingsApi.update({ ...settings, welcomeDismissed: true });
     } catch (err) {
@@ -49,54 +45,58 @@ export default function WelcomeModal() {
     }
   }
 
+  if (dismissed) return null;
+
   // The animated explainer is served as a standalone page and embedded here.
   // A hosted YouTube/Vimeo embed URL (settings.onboardingVideoUrl) overrides it.
   const embedUrl = settings.onboardingVideoUrl || '/admin/onboarding.html';
 
-  // Modal is always mounted (open controlled by prop), matching the app's other
-  // working modals; the heavy iframe only loads while it's open.
   return (
-    <Modal
-      open={open}
-      onClose={dismiss}
-      title="Welcome to ReturnFlow 👋"
-      primaryAction={{ content: 'Get started', onAction: dismiss, loading: saving }}
-      secondaryActions={[{ content: 'Skip for now', onAction: dismiss }]}
-      large
-    >
-      {open && (
-      <Modal.Section>
-        <BlockStack gap="400">
-          <Text tone="subdued">Returns made effortless — here's a quick tour.</Text>
+    <>
+      <Banner
+        tone="info"
+        title="Welcome to ReturnFlow 👋"
+        onDismiss={dismiss}
+        action={{ content: 'Watch the 2-min tour', onAction: () => setModalOpen(true) }}
+      >
+        <p>Returns made effortless. Take a quick tour, then follow the setup checklist below to go live.</p>
+      </Banner>
 
-          <div style={{ position: 'relative', paddingTop: '56.25%', borderRadius: 8, overflow: 'hidden', background: '#4F46E5' }}>
-            <iframe
-              src={embedUrl}
-              title="ReturnFlow tour"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-              allowFullScreen
-              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0 }}
-            />
-          </div>
-
-          <BlockStack gap="300">
-            {POINTS.map((p) => (
-              <InlineStack key={p.t} gap="300" blockAlign="start" wrap={false}>
-                <span style={{ flexShrink: 0 }}><Icon source={CheckCircleIcon} tone="success" /></span>
-                <BlockStack gap="050">
-                  <Text variant="headingSm" as="h3">{p.t}</Text>
-                  <Text tone="subdued" variant="bodySm">{p.d}</Text>
-                </BlockStack>
-              </InlineStack>
-            ))}
-          </BlockStack>
-
-          <Text tone="subdued" variant="bodySm">
-            Click <b>Get started</b> and follow the setup checklist below to go live.
-          </Text>
-        </BlockStack>
-      </Modal.Section>
-      )}
-    </Modal>
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="ReturnFlow — a quick tour"
+        primaryAction={{ content: 'Got it, let’s go', onAction: dismiss, loading: saving }}
+        secondaryActions={[{ content: 'Close', onAction: () => setModalOpen(false) }]}
+        large
+      >
+        {modalOpen && (
+          <Modal.Section>
+            <BlockStack gap="400">
+              <div style={{ position: 'relative', paddingTop: '56.25%', borderRadius: 8, overflow: 'hidden', background: '#4F46E5' }}>
+                <iframe
+                  src={embedUrl}
+                  title="ReturnFlow tour"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowFullScreen
+                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0 }}
+                />
+              </div>
+              <BlockStack gap="300">
+                {POINTS.map((p) => (
+                  <InlineStack key={p.t} gap="300" blockAlign="start" wrap={false}>
+                    <span style={{ flexShrink: 0 }}><Icon source={CheckCircleIcon} tone="success" /></span>
+                    <BlockStack gap="050">
+                      <Text variant="headingSm" as="h3">{p.t}</Text>
+                      <Text tone="subdued" variant="bodySm">{p.d}</Text>
+                    </BlockStack>
+                  </InlineStack>
+                ))}
+              </BlockStack>
+            </BlockStack>
+          </Modal.Section>
+        )}
+      </Modal>
+    </>
   );
 }

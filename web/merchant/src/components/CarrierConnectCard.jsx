@@ -78,7 +78,7 @@ export default function CarrierConnectCard({ plan = 'FREE', onChange }) {
   // Backend counts any active carrier toward the plan limit (credentials or not).
   const activeCount = configs.filter((c) => c.isActive).length;
 
-  const managed = configFor('shipengine');
+  const managed = configFor('shippo');
   const managedActive = !!managed?.isActive;
 
   async function toggleManaged() {
@@ -89,7 +89,7 @@ export default function CarrierConnectCard({ plan = 'FREE', onChange }) {
         await carriersApi.delete(managed.id);
         setBanner({ tone: 'success', title: 'Managed labels turned off' });
       } else {
-        await carriersApi.save({ carrier: 'shipengine', isActive: true });
+        await carriersApi.save({ carrier: 'shippo', isActive: true });
         setBanner({ tone: 'success', title: 'Managed return labels enabled' });
       }
       await load();

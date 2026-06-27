@@ -5,9 +5,9 @@ const { encrypt, decrypt } = require('../../utils/encryption');
 const { PLAN_LIMITS } = require('../../middleware/planGating');
 const logger = require('../../utils/logger');
 
-// 'shipengine' is the managed-labels backend (ReturnFlow's aggregator account);
-// the others are bring-your-own-carrier.
-const SUPPORTED_CARRIERS = ['shipengine', 'evri', 'royalmail', 'inpost'];
+// 'shippo' / 'shipengine' are managed-labels backends (ReturnFlow's aggregator
+// account); the others are bring-your-own-carrier.
+const SUPPORTED_CARRIERS = ['shippo', 'shipengine', 'evri', 'royalmail', 'inpost'];
 
 const router = Router();
 router.use(verifyShopifySession);

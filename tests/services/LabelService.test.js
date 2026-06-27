@@ -98,6 +98,15 @@ describe('Mock adapter outputs', () => {
     expect(label.trackingCode).toMatch(/^SE[A-F0-9]+$/);
   });
 
+  it('Managed (shippo) simulates when no platform env is configured', async () => {
+    delete process.env.SHIPPO_API_KEY;
+    const adapter = LabelService.getCarrierAdapter(shopWith('shippo'), 'shippo');
+    expect(adapter.carrierName).toBe('royalmail'); // default carrierLabel for UK managed labels
+    const label = await adapter.generateLabel({ senderAddress: { name: 'J' }, recipientAddress: { name: 'S' }, weight: 0.5 });
+    expect(label.simulated).toBe(true);
+    expect(label.trackingCode).toMatch(/^SHP[A-F0-9]+$/);
+  });
+
   it('Managed (shipengine) goes live using the platform env account', async () => {
     process.env.SHIPENGINE_API_KEY = 'TEST_platform';
     process.env.SHIPENGINE_CARRIER_ID = 'se-999';

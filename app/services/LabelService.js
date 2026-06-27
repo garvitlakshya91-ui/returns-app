@@ -151,6 +151,24 @@ class LabelService {
     const adapterConfig = { credentials, settings: config?.settings || {} };
 
     switch (carrierName) {
+      case 'shippo': {
+        // Managed labels via Shippo: fall back to ReturnFlow's platform Shippo
+        // account (env) when the merchant hasn't supplied their own token, so
+        // they get labels with zero carrier setup. Shippo needs only the token
+        // (rates are fetched per-shipment), so it's live whenever a key exists.
+        const ShippoAdapter = require('./carriers/ShippoAdapter');
+        const sp = config?.settings || {};
+        const apiKey = credentials.apiKey || process.env.SHIPPO_API_KEY || null;
+        return new ShippoAdapter({
+          credentials: { apiKey },
+          settings: {
+            ...sp,
+            servicelevelToken: sp.servicelevelToken || process.env.SHIPPO_SERVICELEVEL_TOKEN || null,
+            live: Boolean(apiKey),
+            carrierLabel: sp.carrierLabel || 'royalmail',
+          },
+        });
+      }
       case 'shipengine': {
         // Managed labels: fall back to ReturnFlow's platform ShipEngine account
         // (env) when the merchant hasn't supplied their own key, so they get

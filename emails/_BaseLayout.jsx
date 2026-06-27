@@ -19,10 +19,10 @@ const footer = {
   fontSize: '12px',
   lineHeight: '20px',
   textAlign: 'center',
+  margin: '2px 0',
 };
 
-const brand = {
-  color: '#4F46E5',
+const brandText = {
   fontSize: '20px',
   fontWeight: '700',
   marginBottom: '24px',
@@ -33,19 +33,29 @@ const hr = {
   margin: '24px 0',
 };
 
-export default function BaseLayout({ preview, children }) {
+// `brand` carries the merchant's identity: { name, color, supportEmail }.
+// Falls back to ReturnFlow defaults so the layout still renders if branding
+// can't be resolved.
+export default function BaseLayout({ preview, brand = {}, children }) {
+  const brandName = brand.name || 'ReturnFlow';
+  const brandColor = brand.color || '#4F46E5';
+  const supportEmail = brand.supportEmail || null;
+
   return (
     <Html>
       <Head />
       {preview ? <Preview>{preview}</Preview> : null}
       <Body style={main}>
         <Container style={container}>
-          <Text style={brand}>ReturnFlow</Text>
+          <Text style={{ ...brandText, color: brandColor }}>{brandName}</Text>
           {children}
           <Hr style={hr} />
-          <Text style={footer}>
-            Powered by ReturnFlow · returnflow.co.uk
-          </Text>
+          <Section>
+            {supportEmail ? (
+              <Text style={footer}>Questions? Contact {supportEmail}</Text>
+            ) : null}
+            <Text style={footer}>Powered by ReturnFlow</Text>
+          </Section>
         </Container>
       </Body>
     </Html>

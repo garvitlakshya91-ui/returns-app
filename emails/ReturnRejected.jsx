@@ -12,9 +12,9 @@ const reasonBox = {
   margin: '16px 0',
 };
 
-export default function ReturnRejected({ customerName, orderName, returnId, reason }) {
+export default function ReturnRejected({ customerName, orderName, returnId, reason, brand }) {
   return (
-    <BaseLayout preview={`Update on your return for ${orderName}`}>
+    <BaseLayout preview={`Update on your return for ${orderName}`} brand={brand}>
       <Heading style={heading}>Return request update</Heading>
       <Text style={para}>Hi {customerName || 'there'},</Text>
       <Text style={para}>

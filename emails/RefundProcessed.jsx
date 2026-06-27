@@ -31,11 +31,12 @@ export default function RefundProcessed({
   resolutionText,
   refundAmount,
   currency,
+  brand,
 }) {
   const sym = currencySymbol(currency);
   const amount = Number(refundAmount || 0).toFixed(2);
   return (
-    <BaseLayout preview={`Refund processed for ${orderName}`}>
+    <BaseLayout preview={`Refund processed for ${orderName}`} brand={brand}>
       <Heading style={heading}>Refund processed</Heading>
       <Text style={para}>Hi {customerName || 'there'},</Text>
       <Text style={para}>

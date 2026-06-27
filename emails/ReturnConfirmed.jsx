@@ -6,9 +6,9 @@ const para = { color: '#374151', fontSize: '15px', lineHeight: '22px' };
 const muted = { color: '#6b7280', fontSize: '13px' };
 const itemRow = { padding: '8px 0', borderBottom: '1px solid #f3f4f6' };
 
-export default function ReturnConfirmed({ customerName, orderName, returnId, items }) {
+export default function ReturnConfirmed({ customerName, orderName, returnId, items, brand }) {
   return (
-    <BaseLayout preview={`We received your return request for ${orderName}`}>
+    <BaseLayout preview={`We received your return request for ${orderName}`} brand={brand}>
       <Heading style={heading}>Return request received</Heading>
       <Text style={para}>Hi {customerName || 'there'},</Text>
       <Text style={para}>

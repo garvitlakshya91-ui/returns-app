@@ -5,9 +5,9 @@ const heading = { color: '#059669', fontSize: '22px', fontWeight: '700', marginB
 const para = { color: '#374151', fontSize: '15px', lineHeight: '22px' };
 const muted = { color: '#6b7280', fontSize: '13px' };
 
-export default function ReturnApproved({ customerName, orderName, returnId }) {
+export default function ReturnApproved({ customerName, orderName, returnId, brand }) {
   return (
-    <BaseLayout preview={`Return approved for ${orderName}`}>
+    <BaseLayout preview={`Return approved for ${orderName}`} brand={brand}>
       <Heading style={heading}>Return approved</Heading>
       <Text style={para}>Hi {customerName || 'there'},</Text>
       <Text style={para}>

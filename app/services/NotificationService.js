@@ -43,14 +43,42 @@ class NotificationService {
   }
 
   /**
+   * Resolve the merchant's email branding from their shop settings, so
+   * customer emails carry the store's name/colour/support address instead of
+   * generic ReturnFlow styling. Defensive: any failure → ReturnFlow defaults.
+   */
+  static async _branding(shopId) {
+    try {
+      const prisma = require('../config/database');
+      const shop = await prisma.shop.findUnique({
+        where: { id: shopId },
+        select: { name: true, email: true, settings: true },
+      });
+      const s = shop?.settings || {};
+      const color = typeof s.primaryColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(s.primaryColor)
+        ? s.primaryColor
+        : '#4F46E5';
+      return {
+        name: shop?.name || 'ReturnFlow',
+        color,
+        supportEmail: s.supportEmail || shop?.email || null,
+      };
+    } catch {
+      return { name: 'ReturnFlow', color: '#4F46E5', supportEmail: null };
+    }
+  }
+
+  /**
    * Send return confirmation email.
    */
   static async sendReturnConfirmation(returnRecord) {
+    const brand = await NotificationService._branding(returnRecord.shopId);
     return NotificationService.sendEmail({
       to: returnRecord.customerEmail,
       subject: `Return Request Received — ${returnRecord.shopifyOrderName}`,
       template: 'ReturnConfirmed',
       data: {
+        brand,
         customerName: returnRecord.customerName,
         orderName: returnRecord.shopifyOrderName,
         returnId: returnRecord.id,
@@ -68,11 +96,13 @@ class NotificationService {
    * Send label ready email with QR code.
    */
   static async sendLabelReady(returnRecord, label) {
+    const brand = await NotificationService._branding(returnRecord.shopId);
     return NotificationService.sendEmail({
       to: returnRecord.customerEmail,
       subject: `Your Return Label is Ready — ${returnRecord.shopifyOrderName}`,
       template: 'LabelReady',
       data: {
+        brand,
         customerName: returnRecord.customerName,
         orderName: returnRecord.shopifyOrderName,
         returnId: returnRecord.id,
@@ -94,11 +124,13 @@ class NotificationService {
       EXCHANGE: 'processed as an exchange',
     }[returnRecord.resolution] || 'processed';
 
+    const brand = await NotificationService._branding(returnRecord.shopId);
     return NotificationService.sendEmail({
       to: returnRecord.customerEmail,
       subject: `Refund Processed — ${returnRecord.shopifyOrderName}`,
       template: 'RefundProcessed',
       data: {
+        brand,
         customerName: returnRecord.customerName,
         orderName: returnRecord.shopifyOrderName,
         returnId: returnRecord.id,
@@ -114,11 +146,13 @@ class NotificationService {
    * Send return approved notification.
    */
   static async sendReturnApproved(returnRecord) {
+    const brand = await NotificationService._branding(returnRecord.shopId);
     return NotificationService.sendEmail({
       to: returnRecord.customerEmail,
       subject: `Return Approved — ${returnRecord.shopifyOrderName}`,
       template: 'ReturnApproved',
       data: {
+        brand,
         customerName: returnRecord.customerName,
         orderName: returnRecord.shopifyOrderName,
         returnId: returnRecord.id,
@@ -130,11 +164,13 @@ class NotificationService {
    * Send return rejected notification.
    */
   static async sendReturnRejected(returnRecord, reason) {
+    const brand = await NotificationService._branding(returnRecord.shopId);
     return NotificationService.sendEmail({
       to: returnRecord.customerEmail,
       subject: `Return Request Update — ${returnRecord.shopifyOrderName}`,
       template: 'ReturnRejected',
       data: {
+        brand,
         customerName: returnRecord.customerName,
         orderName: returnRecord.shopifyOrderName,
         returnId: returnRecord.id,

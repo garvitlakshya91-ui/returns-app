@@ -1,11 +1,18 @@
-const { installQueueMock, fakeReturn, fakeReturnItem } = require('../helpers');
+const { installQueueMock, installPrismaMock, fakeReturn, fakeReturnItem } = require('../helpers');
 
 let queue;
+let prisma;
 let NotificationService;
 
 beforeEach(() => {
   jest.resetModules();
   queue = installQueueMock();
+  prisma = installPrismaMock();
+  prisma.shop.findUnique.mockResolvedValue({
+    name: 'Wildgrove & Co.',
+    email: 'hello@wildgrove.co',
+    settings: { primaryColor: '#FF8800', supportEmail: 'help@wildgrove.co' },
+  });
   NotificationService = require('../../app/services/NotificationService');
 });
 
@@ -38,6 +45,8 @@ describe('NotificationService named-template helpers', () => {
     expect(args.template).toBe('ReturnConfirmed');
     expect(args.to).toBe(ret.customerEmail);
     expect(args.data.items[0]).toEqual({ title: 'A', variant: 'M', reason: 'doesnt_fit', quantity: 1 });
+    // Merchant branding is resolved and attached to every email.
+    expect(args.data.brand).toEqual({ name: 'Wildgrove & Co.', color: '#FF8800', supportEmail: 'help@wildgrove.co' });
   });
 
   it('sendLabelReady includes carrier, tracking and labelUrl', async () => {

@@ -25,10 +25,12 @@ export default function LabelReady({
   qrCodeUrl,
   carrier,
   trackingCode,
+  brand,
 }) {
+  const accent = brand?.color || '#4F46E5';
   return (
-    <BaseLayout preview={`Your return label for ${orderName} is ready`}>
-      <Heading style={heading}>Your return label is ready</Heading>
+    <BaseLayout preview={`Your return label for ${orderName} is ready`} brand={brand}>
+      <Heading style={{ ...heading, color: accent }}>Your return label is ready</Heading>
       <Text style={para}>Hi {customerName || 'there'},</Text>
       <Text style={para}>
         Your return label for order <strong>{orderName}</strong> is ready.
@@ -56,7 +58,7 @@ export default function LabelReady({
 
       {labelUrl ? (
         <Section style={{ textAlign: 'center', margin: '24px 0' }}>
-          <Button href={labelUrl} style={button}>
+          <Button href={labelUrl} style={{ ...button, backgroundColor: accent }}>
             Download label
           </Button>
         </Section>

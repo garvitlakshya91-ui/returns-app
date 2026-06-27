@@ -20,7 +20,9 @@ eventBus.on(LABEL_GENERATED, async ({ returnId, labelId }) => {
 
     console.log(`[Event] Label generated for return: ${returnId}`);
 
-    // TODO: Email customer with QR/label via NotificationService
+    // The customer "label ready" email is sent from onReturnApproved (which
+    // owns the approve → generate-label → email sequence), so it is not
+    // re-sent here.
   } catch (err) {
     console.error(`[Event] Error handling ${LABEL_GENERATED}:`, err);
   }

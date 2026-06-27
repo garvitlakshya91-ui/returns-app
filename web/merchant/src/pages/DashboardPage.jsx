@@ -18,6 +18,7 @@ import MetricCard from '../components/MetricCard';
 import ReturnStatusBadge from '../components/ReturnStatusBadge';
 import SetupGuide from '../components/SetupGuide';
 import WelcomeModal from '../components/WelcomeModal';
+import ManagedLabelsCard from '../components/ManagedLabelsCard';
 import AppFooter from '../components/AppFooter';
 import { returnsApi } from '../api';
 
@@ -77,6 +78,11 @@ export default function DashboardPage() {
         {/* First-run onboarding checklist (hides itself once dismissed) */}
         <Layout.Section>
           <SetupGuide />
+        </Layout.Section>
+
+        {/* Promote one-click managed labels (hides once enabled) */}
+        <Layout.Section>
+          <ManagedLabelsCard />
         </Layout.Section>
 
         {/* Metrics row */}

@@ -73,13 +73,13 @@ export default function WelcomeModal() {
         {modalOpen && (
           <Modal.Section>
             <BlockStack gap="400">
-              <div style={{ position: 'relative', paddingTop: '56.25%', borderRadius: 8, overflow: 'hidden', background: '#4F46E5' }}>
+              <div style={{ width: '100%', height: 'min(70vh, 620px)', borderRadius: 8, overflow: 'hidden', background: '#4F46E5' }}>
                 <iframe
                   src={embedUrl}
                   title="ReturnFlow tour"
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                   allowFullScreen
-                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0 }}
+                  style={{ width: '100%', height: '100%', border: 0, display: 'block' }}
                 />
               </div>
               <BlockStack gap="300">

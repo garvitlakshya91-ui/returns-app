@@ -79,7 +79,9 @@ export default function CarrierConnectCard({ plan = 'FREE', onChange }) {
   // Backend counts any active carrier toward the plan limit (credentials or not).
   const activeCount = configs.filter((c) => c.isActive).length;
 
-  const managed = configFor('shippo');
+  // Either aggregator backend counts as "managed" (shippo is current; shipengine
+  // is the legacy one some shops may still have enabled).
+  const managed = configs.find((c) => c.carrier === 'shippo' || c.carrier === 'shipengine');
   const managedActive = !!managed?.isActive;
 
   async function toggleManaged() {
@@ -290,13 +292,13 @@ export default function CarrierConnectCard({ plan = 'FREE', onChange }) {
       >
         {videoOpen && (
           <Modal.Section>
-            <div style={{ position: 'relative', paddingTop: '56.25%', borderRadius: 8, overflow: 'hidden', background: '#faf9f5' }}>
+            <div style={{ width: '100%', height: 'min(70vh, 620px)', borderRadius: 8, overflow: 'hidden', background: '#faf9f5' }}>
               <iframe
                 src="/admin/managed-labels.html"
                 title="How managed labels work"
                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                 allowFullScreen
-                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0 }}
+                style={{ width: '100%', height: '100%', border: 0, display: 'block' }}
               />
             </div>
           </Modal.Section>

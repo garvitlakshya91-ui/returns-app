@@ -46,6 +46,11 @@ export const returnsApi = {
     body: JSON.stringify({ reason }),
   }),
   process: (id) => apiFetch(`/returns/${id}/process`, { method: 'PUT' }),
+  bulk: (action, ids, reason) => apiFetch('/returns/bulk', {
+    method: 'POST',
+    body: JSON.stringify({ action, ids, reason }),
+  }),
+  demo: () => apiFetch('/returns/demo', { method: 'POST' }),
 };
 
 export const policiesApi = {

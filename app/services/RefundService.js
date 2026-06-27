@@ -27,6 +27,18 @@ class RefundService {
     // exceeds the item value.
     const refundAmount = Math.max(0, totalValue - fee);
 
+    // Demo / test-mode returns have no real Shopify order, so skip the Shopify
+    // mutation and just mark them processed — lets merchants walk the full flow.
+    if (returnRecord.shopifyOrderId === 'demo') {
+      await prisma.return.update({
+        where: { id: returnId },
+        data: { status: 'PROCESSED', refundAmount, processedAt: new Date() },
+      });
+      eventBus.emit(REFUND_PROCESSED, { returnId, refundAmount, resolution });
+      logger.info({ returnId, resolution, refundAmount }, 'Demo return processed (no Shopify call)');
+      return { success: true, type: resolution, demo: true, amount: refundAmount };
+    }
+
     const accessToken = decrypt(shop.shopifyToken);
     const session = { shop: shop.shopifyDomain, accessToken };
     const client = new shopify.clients.Graphql({ session });

@@ -33,9 +33,11 @@ export default function ReturnsListPage() {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState([]);
   const [queryValue, setQueryValue] = useState('');
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [demoLoading, setDemoLoading] = useState(false);
 
   const resourceName = { singular: 'return', plural: 'returns' };
-  const { selectedResources, allResourcesSelected, handleSelectionChange } =
+  const { selectedResources, allResourcesSelected, handleSelectionChange, clearSelection } =
     useIndexResourceState(returns);
 
   const loadReturns = useCallback(async () => {
@@ -56,6 +58,40 @@ export default function ReturnsListPage() {
   useEffect(() => {
     loadReturns();
   }, [loadReturns]);
+
+  async function runBulk(action, reason) {
+    if (!selectedResources.length) return;
+    setBulkLoading(true);
+    try {
+      await returnsApi.bulk(action, selectedResources, reason);
+      clearSelection();
+      await loadReturns();
+    } catch (err) {
+      console.error('Bulk action error:', err);
+    } finally {
+      setBulkLoading(false);
+    }
+  }
+
+  async function handleDemo() {
+    setDemoLoading(true);
+    try {
+      await returnsApi.demo();
+      setStatusFilter([]);
+      setPage(1);
+      await loadReturns();
+    } catch (err) {
+      console.error('Demo return error:', err);
+    } finally {
+      setDemoLoading(false);
+    }
+  }
+
+  const promotedBulkActions = [
+    { content: 'Approve', onAction: () => runBulk('approve') },
+    { content: 'Reject', onAction: () => runBulk('reject', 'Rejected by merchant') },
+    { content: 'Process refund', onAction: () => runBulk('process') },
+  ];
 
   const filters = [
     {
@@ -101,7 +137,11 @@ export default function ReturnsListPage() {
   ));
 
   return (
-    <Page title="Returns" fullWidth>
+    <Page
+      title="Returns"
+      fullWidth
+      primaryAction={{ content: 'Create test return', onAction: handleDemo, loading: demoLoading }}
+    >
       <Card padding="0">
         <Filters
           queryValue={queryValue}
@@ -116,8 +156,12 @@ export default function ReturnsListPage() {
             <Spinner size="large" />
           </div>
         ) : returns.length === 0 ? (
-          <EmptyState heading="No returns found" image="">
-            <p>Returns from your customers will appear here once they submit a request through your returns portal.</p>
+          <EmptyState
+            heading="No returns found"
+            image=""
+            action={{ content: 'Create test return', onAction: handleDemo, loading: demoLoading }}
+          >
+            <p>Returns from your customers will appear here once they submit a request through your returns portal. Want to see how it works? Create a test return.</p>
           </EmptyState>
         ) : (
           <>
@@ -126,6 +170,8 @@ export default function ReturnsListPage() {
               itemCount={returns.length}
               selectedItemsCount={allResourcesSelected ? 'All' : selectedResources.length}
               onSelectionChange={handleSelectionChange}
+              promotedBulkActions={promotedBulkActions}
+              loading={bulkLoading}
               headings={[
                 { title: 'Order' },
                 { title: 'Customer' },

@@ -136,3 +136,41 @@ describe('PUT /api/admin/returns/:id/process', () => {
     expect(res.body.error).toBe('Shopify is down');
   });
 });
+
+describe('POST /api/admin/returns/bulk', () => {
+  it('400 when ids is empty', async () => {
+    const res = await request(app).post('/api/admin/returns/bulk').send({ action: 'approve', ids: [] });
+    expect(res.status).toBe(400);
+  });
+
+  it('400 on an invalid action', async () => {
+    const res = await request(app).post('/api/admin/returns/bulk').send({ action: 'nuke', ids: ['r1'] });
+    expect(res.status).toBe(400);
+  });
+
+  it('approves found returns and reports the rest as failed', async () => {
+    prisma.return.findFirst
+      .mockResolvedValueOnce(fakeReturn({ id: 'r1', status: 'REQUESTED' })) // r1 found
+      .mockResolvedValueOnce(null);                                          // r2 not REQUESTED
+    prisma.return.update.mockResolvedValue(fakeReturn({ id: 'r1', status: 'APPROVED' }));
+
+    const res = await request(app).post('/api/admin/returns/bulk').send({ action: 'approve', ids: ['r1', 'r2'] });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ action: 'approve', success: 1, failed: ['r2'] });
+  });
+});
+
+describe('POST /api/admin/returns/demo', () => {
+  it('creates a shop-scoped demo return and emits return.created', async () => {
+    prisma.shop.findUnique.mockResolvedValue(fakeShop({ id: 'shop_test_1', email: 'm@shop.co' }));
+    prisma.return.create.mockResolvedValue(fakeReturn({ id: 'demo1', shopifyOrderId: 'demo' }));
+    const spy = jest.spyOn(eventBus, 'emit');
+
+    const res = await request(app).post('/api/admin/returns/demo');
+    expect(res.status).toBe(201);
+    const createArg = prisma.return.create.mock.calls[0][0];
+    expect(createArg.data.shopId).toBe('shop_test_1');
+    expect(createArg.data.shopifyOrderId).toBe('demo');
+    expect(spy).toHaveBeenCalledWith('return.created', expect.objectContaining({ shopId: 'shop_test_1' }));
+  });
+});

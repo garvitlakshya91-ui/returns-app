@@ -17,6 +17,7 @@ import { OrderIcon, ClockIcon, CheckCircleIcon, CashDollarIcon } from '@shopify/
 import MetricCard from '../components/MetricCard';
 import ReturnStatusBadge from '../components/ReturnStatusBadge';
 import SetupGuide from '../components/SetupGuide';
+import WelcomeModal from '../components/WelcomeModal';
 import AppFooter from '../components/AppFooter';
 import { returnsApi } from '../api';
 
@@ -68,6 +69,8 @@ export default function DashboardPage() {
 
   return (
     <Page title="Dashboard">
+      {/* First-run welcome (plays the tour, shows once) */}
+      <WelcomeModal />
       <Layout>
         {/* First-run onboarding checklist (hides itself once dismissed) */}
         <Layout.Section>

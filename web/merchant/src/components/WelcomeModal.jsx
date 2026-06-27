@@ -44,8 +44,9 @@ export default function WelcomeModal() {
 
   if (!open) return null;
 
-  // A YouTube/Vimeo embed URL can override the bundled clip once it's hosted.
-  const embedUrl = settings.onboardingVideoUrl;
+  // The animated explainer is served as a standalone page and embedded here.
+  // A hosted YouTube/Vimeo embed URL (settings.onboardingVideoUrl) overrides it.
+  const embedUrl = settings.onboardingVideoUrl || '/admin/onboarding.html';
 
   return (
     <Modal
@@ -58,26 +59,17 @@ export default function WelcomeModal() {
     >
       <Modal.Section>
         <BlockStack gap="400">
-          <Text tone="subdued">Returns made effortless — here's a quick 30-second tour.</Text>
+          <Text tone="subdued">Returns made effortless — here's a quick tour.</Text>
 
-          {embedUrl ? (
-            <div style={{ position: 'relative', paddingTop: '56.25%', borderRadius: 8, overflow: 'hidden', background: '#0F1020' }}>
-              <iframe
-                src={embedUrl}
-                title="ReturnFlow tour"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0 }}
-              />
-            </div>
-          ) : (
-            <video
-              src="/admin/onboarding.webm"
-              controls
-              playsInline
-              style={{ width: '100%', borderRadius: 8, display: 'block', background: '#0F1020' }}
+          <div style={{ position: 'relative', paddingTop: '56.25%', borderRadius: 8, overflow: 'hidden', background: '#4F46E5' }}>
+            <iframe
+              src={embedUrl}
+              title="ReturnFlow tour"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0 }}
             />
-          )}
+          </div>
 
           <BlockStack gap="300">
             {POINTS.map((p) => (

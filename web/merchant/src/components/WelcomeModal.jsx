@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Modal, BlockStack, InlineStack, Text, Icon } from '@shopify/polaris';
 import { CheckCircleIcon } from '@shopify/polaris-icons';
 import { settingsApi } from '../api';
@@ -16,6 +16,7 @@ export default function WelcomeModal() {
   const [open, setOpen] = useState(false);
   const [settings, setSettings] = useState({});
   const [saving, setSaving] = useState(false);
+  const openedAt = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -24,13 +25,19 @@ export default function WelcomeModal() {
         if (!active) return;
         const s = data.settings || {};
         setSettings(s);
-        if (!s.welcomeDismissed) setOpen(true);
+        if (!s.welcomeDismissed) {
+          openedAt.current = Date.now();
+          setOpen(true);
+        }
       })
       .catch(() => {});
     return () => { active = false; };
   }, []);
 
   async function dismiss() {
+    // Embedded App Bridge can fire Modal onClose immediately on mount; ignore
+    // those spurious closes so the welcome actually stays visible.
+    if (Date.now() - openedAt.current < 700) return;
     setSaving(true);
     setOpen(false);
     try {
@@ -42,12 +49,12 @@ export default function WelcomeModal() {
     }
   }
 
-  if (!open) return null;
-
   // The animated explainer is served as a standalone page and embedded here.
   // A hosted YouTube/Vimeo embed URL (settings.onboardingVideoUrl) overrides it.
   const embedUrl = settings.onboardingVideoUrl || '/admin/onboarding.html';
 
+  // Modal is always mounted (open controlled by prop), matching the app's other
+  // working modals; the heavy iframe only loads while it's open.
   return (
     <Modal
       open={open}
@@ -57,6 +64,7 @@ export default function WelcomeModal() {
       secondaryActions={[{ content: 'Skip for now', onAction: dismiss }]}
       large
     >
+      {open && (
       <Modal.Section>
         <BlockStack gap="400">
           <Text tone="subdued">Returns made effortless — here's a quick tour.</Text>
@@ -88,6 +96,7 @@ export default function WelcomeModal() {
           </Text>
         </BlockStack>
       </Modal.Section>
+      )}
     </Modal>
   );
 }

@@ -11,7 +11,7 @@ beforeEach(() => {
   prisma.shop.findUnique.mockResolvedValue({
     name: 'Wildgrove & Co.',
     email: 'hello@wildgrove.co',
-    settings: { primaryColor: '#FF8800', supportEmail: 'help@wildgrove.co' },
+    settings: { primaryColor: '#FF8800', supportEmail: 'help@wildgrove.co', logoUrl: 'https://wildgrove.co/logo.png' },
   });
   NotificationService = require('../../app/services/NotificationService');
 });
@@ -46,7 +46,9 @@ describe('NotificationService named-template helpers', () => {
     expect(args.to).toBe(ret.customerEmail);
     expect(args.data.items[0]).toEqual({ title: 'A', variant: 'M', reason: 'doesnt_fit', quantity: 1 });
     // Merchant branding is resolved and attached to every email.
-    expect(args.data.brand).toEqual({ name: 'Wildgrove & Co.', color: '#FF8800', supportEmail: 'help@wildgrove.co' });
+    expect(args.data.brand).toEqual({
+      name: 'Wildgrove & Co.', color: '#FF8800', supportEmail: 'help@wildgrove.co', logoUrl: 'https://wildgrove.co/logo.png',
+    });
   });
 
   it('sendLabelReady includes carrier, tracking and labelUrl', async () => {

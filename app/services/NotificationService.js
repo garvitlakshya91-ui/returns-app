@@ -58,13 +58,16 @@ class NotificationService {
       const color = typeof s.primaryColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(s.primaryColor)
         ? s.primaryColor
         : '#4F46E5';
+      // Only allow http(s) image URLs in the email — never javascript:/data: etc.
+      const logoUrl = typeof s.logoUrl === 'string' && /^https?:\/\//i.test(s.logoUrl) ? s.logoUrl : null;
       return {
         name: shop?.name || 'ReturnFlow',
         color,
         supportEmail: s.supportEmail || shop?.email || null,
+        logoUrl,
       };
     } catch {
-      return { name: 'ReturnFlow', color: '#4F46E5', supportEmail: null };
+      return { name: 'ReturnFlow', color: '#4F46E5', supportEmail: null, logoUrl: null };
     }
   }
 

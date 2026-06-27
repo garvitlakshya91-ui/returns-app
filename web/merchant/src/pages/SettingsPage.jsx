@@ -90,6 +90,14 @@ export default function SettingsPage() {
             <BlockStack gap="400">
               <Text variant="headingMd">Portal Branding</Text>
               <TextField
+                label="Logo image URL"
+                helpText="Shown at the top of customer emails. Paste a public image URL (PNG/JPG)."
+                value={settings.logoUrl || ''}
+                onChange={(v) => updateSetting('logoUrl', v)}
+                placeholder="https://yourshop.co.uk/logo.png"
+                autoComplete="off"
+              />
+              <TextField
                 label="Portal heading"
                 value={settings.portalHeading || ''}
                 onChange={(v) => updateSetting('portalHeading', v)}

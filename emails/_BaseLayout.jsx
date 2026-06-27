@@ -1,4 +1,4 @@
-import { Body, Container, Head, Hr, Html, Preview, Section, Text } from '@react-email/components';
+import { Body, Container, Head, Hr, Html, Img, Preview, Section, Text } from '@react-email/components';
 
 const main = {
   backgroundColor: '#f6f9fc',
@@ -40,6 +40,7 @@ export default function BaseLayout({ preview, brand = {}, children }) {
   const brandName = brand.name || 'ReturnFlow';
   const brandColor = brand.color || '#4F46E5';
   const supportEmail = brand.supportEmail || null;
+  const logoUrl = brand.logoUrl || null;
 
   return (
     <Html>
@@ -47,7 +48,11 @@ export default function BaseLayout({ preview, brand = {}, children }) {
       {preview ? <Preview>{preview}</Preview> : null}
       <Body style={main}>
         <Container style={container}>
-          <Text style={{ ...brandText, color: brandColor }}>{brandName}</Text>
+          {logoUrl ? (
+            <Img src={logoUrl} alt={brandName} height={40} style={{ height: '40px', width: 'auto', marginBottom: '24px' }} />
+          ) : (
+            <Text style={{ ...brandText, color: brandColor }}>{brandName}</Text>
+          )}
           {children}
           <Hr style={hr} />
           <Section>

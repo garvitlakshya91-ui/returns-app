@@ -62,6 +62,7 @@ const shopifyClientMock = () => ({
 const shopifyAuthMock = () => ({
   begin: jest.fn().mockResolvedValue('https://shop.myshopify.com/admin/oauth/authorize?fake'),
   callback: jest.fn(),
+  tokenExchange: jest.fn(),
 });
 
 const shopifySessionMock = () => ({

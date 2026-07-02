@@ -1,5 +1,6 @@
 const shopify = require('../config/shopify');
 const prisma = require('../config/database');
+const { installShopFromTokenExchange } = require('../services/shopInstall');
 
 /**
  * Middleware to verify Shopify session token for embedded app requests.
@@ -19,12 +20,23 @@ async function verifyShopifySession(req, res, next) {
     const shopDomain = payload.dest.replace('https://', '');
 
     // Look up the shop in our database
-    const shop = await prisma.shop.findUnique({
+    let shop = await prisma.shop.findUnique({
       where: { shopifyDomain: shopDomain },
     });
 
-    if (!shop) {
-      return res.status(401).json({ error: 'Shop not found. Please reinstall the app.' });
+    // Shopify managed installation grants scopes without ever hitting the
+    // legacy /auth/callback, so a freshly installed shop has no row yet —
+    // and a *re*installed shop has a row whose token was cleared by the
+    // app/uninstalled webhook. The session token is already signature-
+    // verified above — exchange it for an offline access token and
+    // provision the shop on the fly.
+    if (!shop || !shop.shopifyToken) {
+      try {
+        shop = await installShopFromTokenExchange(shopDomain, token);
+      } catch (err) {
+        console.error('Token exchange bootstrap failed:', err.message);
+        return res.status(401).json({ error: 'Shop not found. Please reinstall the app.' });
+      }
     }
 
     req.shopId = shop.id;

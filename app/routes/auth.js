@@ -4,6 +4,7 @@ const prisma = require('../config/database');
 const { encrypt } = require('../utils/encryption');
 const eventBus = require('../events/eventBus');
 const { SHOP_INSTALLED } = require('../events/emitters');
+const { registerWebhooks } = require('../services/shopInstall');
 
 const router = Router();
 
@@ -87,48 +88,5 @@ router.get('/auth/callback', async (req, res) => {
     res.status(500).send('Error completing OAuth. Please try installing again.');
   }
 });
-
-/**
- * Register mandatory webhooks with Shopify via GraphQL.
- */
-async function registerWebhooks(session) {
-  const client = new shopify.clients.Graphql({ session });
-
-  const webhooks = [
-    { topic: 'ORDERS_CREATE', path: '/webhooks/orders/create' },
-    { topic: 'ORDERS_FULFILLED', path: '/webhooks/orders/fulfilled' },
-    { topic: 'APP_UNINSTALLED', path: '/webhooks/app/uninstalled' },
-    { topic: 'SHOP_UPDATE', path: '/webhooks/shop/update' },
-  ];
-
-  for (const webhook of webhooks) {
-    try {
-      await client.request(`
-        mutation webhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $webhookSubscription: WebhookSubscriptionInput!) {
-          webhookSubscriptionCreate(topic: $topic, webhookSubscription: $webhookSubscription) {
-            webhookSubscription {
-              id
-            }
-            userErrors {
-              field
-              message
-            }
-          }
-        }
-      `, {
-        variables: {
-          topic: webhook.topic,
-          webhookSubscription: {
-            callbackUrl: `${process.env.HOST}${webhook.path}`,
-            format: 'JSON',
-          },
-        },
-      });
-      console.log(`Webhook registered: ${webhook.topic}`);
-    } catch (err) {
-      console.error(`Failed to register webhook ${webhook.topic}:`, err.message);
-    }
-  }
-}
 
 module.exports = router;

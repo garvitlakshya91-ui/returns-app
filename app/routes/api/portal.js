@@ -4,7 +4,7 @@ const { portalLimiter, lookupLimiter, createReturnLimiter } = require('../../mid
 const { planGate, loadShopFromBody, PLAN_LIMITS } = require('../../middleware/planGating');
 const prisma = require('../../config/database');
 const shopify = require('../../config/shopify');
-const { decrypt } = require('../../utils/encryption');
+const ShopToken = require('../../services/ShopToken');
 const ReturnService = require('../../services/ReturnService');
 const PolicyEngine = require('../../services/PolicyEngine');
 const StorageService = require('../../services/StorageService');
@@ -47,7 +47,7 @@ router.post('/lookup', lookupLimiter, async (req, res) => {
       return res.status(404).json({ error: 'Shop not found' });
     }
 
-    const accessToken = decrypt(shop.shopifyToken);
+    const accessToken = await ShopToken.getAccessToken(shop);
     const session = { shop: shop.shopifyDomain, accessToken };
     const client = new shopify.clients.Graphql({ session });
 

@@ -120,7 +120,10 @@ describe('verifyShopifySession', () => {
 
   it('attaches req.shop / req.shopId / req.shopDomain and calls next on success', async () => {
     shopify.session.decodeSessionToken.mockResolvedValue({ dest: 'https://test-shop.myshopify.com' });
-    const shop = fakeShop({ id: 'shop_abc' });
+    // A genuinely-encrypted legacy (non-expiring) token — needsReauth must
+    // treat it as valid without attempting token exchange.
+    const { encrypt } = require('../../app/utils/encryption');
+    const shop = fakeShop({ id: 'shop_abc', shopifyToken: encrypt('legacy_offline_token') });
     prisma.shop.findUnique.mockResolvedValue(shop);
 
     const req = { headers: { authorization: 'Bearer good_token' } };

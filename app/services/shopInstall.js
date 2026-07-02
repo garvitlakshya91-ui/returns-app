@@ -10,7 +10,7 @@
 const shopify = require('../config/shopify');
 const { RequestedTokenType } = require('@shopify/shopify-api');
 const prisma = require('../config/database');
-const { encrypt } = require('../utils/encryption');
+const { serializeSession } = require('./ShopToken');
 const eventBus = require('../events/eventBus');
 const { SHOP_INSTALLED } = require('../events/emitters');
 const logger = require('../utils/logger');
@@ -71,10 +71,14 @@ async function installShopFromTokenExchange(shopDomain, sessionToken) {
   const promise = (async () => {
     let exchanged;
     try {
+      // `expiring: true` is REQUIRED for public apps created on/after
+      // 1 Apr 2026 — asking for a legacy non-expiring offline token gets
+      // 403 Forbidden from Shopify. ShopToken handles the hourly refresh.
       exchanged = await shopify.auth.tokenExchange({
         shop: shopDomain,
         sessionToken,
         requestedTokenType: RequestedTokenType.OfflineAccessToken,
+        expiring: true,
       });
     } catch (err) {
       // Surface Shopify's response body — the status line alone ("403
@@ -101,16 +105,17 @@ async function installShopFromTokenExchange(shopDomain, sessionToken) {
     `);
     const shopData = shopDataResponse.data.shop;
 
+    const storedToken = serializeSession(session);
     const shop = await prisma.shop.upsert({
       where: { shopifyDomain: shopDomain },
       update: {
-        shopifyToken: encrypt(session.accessToken),
+        shopifyToken: storedToken,
         name: shopData.name,
         email: shopData.email,
       },
       create: {
         shopifyDomain: shopDomain,
-        shopifyToken: encrypt(session.accessToken),
+        shopifyToken: storedToken,
         name: shopData.name,
         email: shopData.email,
       },

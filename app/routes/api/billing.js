@@ -38,7 +38,7 @@ router.post('/subscribe', async (req, res) => {
     }
     const isAnnual = interval === 'annual';
 
-    const client = BillingService.graphqlClient(req.shop);
+    const client = await BillingService.graphqlClient(req.shop);
 
     // ── Downgrade / cancel ──
     if (plan === 'FREE') {
@@ -123,7 +123,7 @@ router.post('/subscribe', async (req, res) => {
  */
 router.post('/confirm', async (req, res) => {
   try {
-    const client = BillingService.graphqlClient(req.shop);
+    const client = await BillingService.graphqlClient(req.shop);
     const active = await BillingService.getActiveSubscription(client);
 
     if (!active) {

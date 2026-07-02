@@ -1,6 +1,6 @@
 const prisma = require('../config/database');
 const shopify = require('../config/shopify');
-const { decrypt } = require('../utils/encryption');
+const ShopToken = require('./ShopToken');
 const eventBus = require('../events/eventBus');
 const { EXCHANGE_CREATED } = require('../events/emitters');
 const logger = require('../utils/logger');
@@ -22,7 +22,7 @@ class ExchangeService {
       throw new Error('No exchange variants specified on any return item');
     }
 
-    const accessToken = decrypt(returnRecord.shop.shopifyToken);
+    const accessToken = await ShopToken.getAccessToken(returnRecord.shop);
     const session = { shop: returnRecord.shop.shopifyDomain, accessToken };
     const client = new shopify.clients.Graphql({ session });
 

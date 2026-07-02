@@ -1,6 +1,7 @@
 const shopify = require('../config/shopify');
 const prisma = require('../config/database');
 const { installShopFromTokenExchange } = require('../services/shopInstall');
+const { needsReauth } = require('../services/ShopToken');
 
 /**
  * Middleware to verify Shopify session token for embedded app requests.
@@ -27,10 +28,11 @@ async function verifyShopifySession(req, res, next) {
     // Shopify managed installation grants scopes without ever hitting the
     // legacy /auth/callback, so a freshly installed shop has no row yet —
     // and a *re*installed shop has a row whose token was cleared by the
-    // app/uninstalled webhook. The session token is already signature-
-    // verified above — exchange it for an offline access token and
-    // provision the shop on the fly.
-    if (!shop || !shop.shopifyToken) {
+    // app/uninstalled webhook (or an expiring token whose 90-day refresh
+    // token lapsed). The session token is already signature-verified
+    // above — exchange it for a fresh offline token and provision the
+    // shop on the fly.
+    if (!shop || needsReauth(shop)) {
       try {
         shop = await installShopFromTokenExchange(shopDomain, token);
       } catch (err) {

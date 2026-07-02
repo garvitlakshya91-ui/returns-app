@@ -1,6 +1,6 @@
 const prisma = require('../config/database');
 const shopify = require('../config/shopify');
-const { decrypt } = require('../utils/encryption');
+const ShopToken = require('./ShopToken');
 const eventBus = require('../events/eventBus');
 const { REFUND_PROCESSED } = require('../events/emitters');
 const logger = require('../utils/logger');
@@ -39,7 +39,7 @@ class RefundService {
       return { success: true, type: resolution, demo: true, amount: refundAmount };
     }
 
-    const accessToken = decrypt(shop.shopifyToken);
+    const accessToken = await ShopToken.getAccessToken(shop);
     const session = { shop: shop.shopifyDomain, accessToken };
     const client = new shopify.clients.Graphql({ session });
 

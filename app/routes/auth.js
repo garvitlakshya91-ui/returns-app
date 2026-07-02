@@ -1,10 +1,10 @@
 const { Router } = require('express');
 const shopify = require('../config/shopify');
 const prisma = require('../config/database');
-const { encrypt } = require('../utils/encryption');
 const eventBus = require('../events/eventBus');
 const { SHOP_INSTALLED } = require('../events/emitters');
 const { registerWebhooks } = require('../services/shopInstall');
+const { serializeSession } = require('../services/ShopToken');
 
 const router = Router();
 
@@ -42,7 +42,7 @@ router.get('/auth/callback', async (req, res) => {
 
     const { session } = callback;
     const shopDomain = session.shop;
-    const accessToken = session.accessToken;
+    const storedToken = serializeSession(session);
 
     // Fetch shop details via GraphQL
     const client = new shopify.clients.Graphql({ session });
@@ -62,13 +62,13 @@ router.get('/auth/callback', async (req, res) => {
     const shop = await prisma.shop.upsert({
       where: { shopifyDomain: shopDomain },
       update: {
-        shopifyToken: encrypt(accessToken),
+        shopifyToken: storedToken,
         name: shopData.name,
         email: shopData.email,
       },
       create: {
         shopifyDomain: shopDomain,
-        shopifyToken: encrypt(accessToken),
+        shopifyToken: storedToken,
         name: shopData.name,
         email: shopData.email,
       },

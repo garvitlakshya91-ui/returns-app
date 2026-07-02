@@ -1,6 +1,5 @@
-const shopify = require('../config/shopify');
 const prisma = require('../config/database');
-const { decrypt } = require('../utils/encryption');
+const ShopToken = require('./ShopToken');
 const logger = require('../utils/logger');
 
 // Single source of truth for plan definitions. Mirrors the pricing table in
@@ -64,9 +63,9 @@ function planKeyFromName(name) {
   return entry ? entry[0] : null;
 }
 
+// Async: expiring offline tokens may need a refresh before use.
 function graphqlClient(shop) {
-  const accessToken = decrypt(shop.shopifyToken);
-  return new shopify.clients.Graphql({ session: { shop: shop.shopifyDomain, accessToken } });
+  return ShopToken.graphqlClient(shop);
 }
 
 /**
@@ -160,7 +159,7 @@ async function getUsageLineItemId(client) {
  */
 async function recordLabelCharge(shop, { amount, description }) {
   try {
-    const client = graphqlClient(shop);
+    const client = await graphqlClient(shop);
     const lineItemId = await getUsageLineItemId(client);
     if (!lineItemId) {
       logger.info({ shop: shop.shopifyDomain }, 'No usage line item — skipping managed-label charge');

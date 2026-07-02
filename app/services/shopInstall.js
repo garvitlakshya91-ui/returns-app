@@ -69,11 +69,25 @@ async function installShopFromTokenExchange(shopDomain, sessionToken) {
   if (inFlight.has(shopDomain)) return inFlight.get(shopDomain);
 
   const promise = (async () => {
-    const { session } = await shopify.auth.tokenExchange({
-      shop: shopDomain,
-      sessionToken,
-      requestedTokenType: RequestedTokenType.OfflineAccessToken,
-    });
+    let exchanged;
+    try {
+      exchanged = await shopify.auth.tokenExchange({
+        shop: shopDomain,
+        sessionToken,
+        requestedTokenType: RequestedTokenType.OfflineAccessToken,
+      });
+    } catch (err) {
+      // Surface Shopify's response body — the status line alone ("403
+      // Forbidden") doesn't say WHY the exchange was refused.
+      logger.error({
+        shopDomain,
+        status: err.response?.code,
+        body: err.response?.body,
+        message: err.message,
+      }, 'Token exchange refused by Shopify');
+      throw err;
+    }
+    const { session } = exchanged;
 
     const client = new shopify.clients.Graphql({ session });
     const shopDataResponse = await client.request(`

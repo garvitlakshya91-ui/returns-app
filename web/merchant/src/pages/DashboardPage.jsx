@@ -18,6 +18,7 @@ import MetricCard from '../components/MetricCard';
 import ReturnStatusBadge from '../components/ReturnStatusBadge';
 import SetupGuide from '../components/SetupGuide';
 import WelcomeModal from '../components/WelcomeModal';
+import ReviewPrompt from '../components/ReviewPrompt';
 import ManagedLabelsCard from '../components/ManagedLabelsCard';
 import AppFooter from '../components/AppFooter';
 import { returnsApi } from '../api';
@@ -74,6 +75,10 @@ export default function DashboardPage() {
         {/* First-run welcome banner + tour (shows once) */}
         <Layout.Section>
           <WelcomeModal />
+        </Layout.Section>
+        {/* One-time review ask after the 3rd processed return */}
+        <Layout.Section>
+          <ReviewPrompt />
         </Layout.Section>
         {/* First-run onboarding checklist (hides itself once dismissed) */}
         <Layout.Section>

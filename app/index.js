@@ -262,10 +262,13 @@ app.get('/admin/*splat', sendMerchantHtml);
 app.get(['/returns', '/analytics', '/policies', '/settings'], sendMerchantHtml);
 app.get('/returns/*splat', sendMerchantHtml);
 
-// Root: send Shopify embeds to /admin, everyone else to /portal
+// Root: send Shopify embeds to /admin; everyone else gets the marketing
+// landing page (returnsflow.uk). Pure HTML/CSS — the strict root CSP
+// (script-src 'self', no inline JS) applies to it.
+const landingHtml = path.join(__dirname, '../web/landing/index.html');
 app.get('/', (req, res) => {
   if (req.query.shop) return res.redirect(`/admin?shop=${req.query.shop}&host=${req.query.host || ''}`);
-  res.redirect('/portal');
+  res.sendFile(landingHtml);
 });
 
 // ─── Register event handlers ───

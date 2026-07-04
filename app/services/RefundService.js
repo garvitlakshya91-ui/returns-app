@@ -80,6 +80,54 @@ class RefundService {
   }
 
   static async _processOriginalRefund(client, returnRecord, amount) {
+    // A refundCreate without a transactions array only restocks items — no
+    // money moves and the order stays PAID. Look up the original payment
+    // transaction so the refund actually returns funds to the customer.
+    const txResponse = await client.request(`
+      query orderTransactions($id: ID!) {
+        order(id: $id) {
+          transactions(first: 10) {
+            id
+            kind
+            status
+            gateway
+            amountSet { shopMoney { amount } }
+          }
+        }
+      }
+    `, { variables: { id: returnRecord.shopifyOrderId } });
+
+    const transactions = txResponse.data?.order?.transactions || [];
+    const parent = transactions.find(
+      (t) => ['SALE', 'CAPTURE'].includes(t.kind) && t.status === 'SUCCESS',
+    );
+
+    const input = {
+      orderId: returnRecord.shopifyOrderId,
+      note: `ReturnFlow return #${returnRecord.id}`,
+      shipping: { fullRefund: false },
+      refundLineItems: returnRecord.items.map((item) => ({
+        lineItemId: item.shopifyLineItemId,
+        quantity: item.quantity,
+      })),
+    };
+    if (parent) {
+      // Never try to refund more than the original payment captured.
+      const captured = Number(parent.amountSet?.shopMoney?.amount || 0);
+      input.transactions = [{
+        orderId: returnRecord.shopifyOrderId,
+        parentId: parent.id,
+        kind: 'REFUND',
+        gateway: parent.gateway,
+        amount: String(captured > 0 ? Math.min(amount, captured) : amount),
+      }];
+    } else {
+      logger.warn(
+        { returnId: returnRecord.id, orderId: returnRecord.shopifyOrderId },
+        'No successful payment transaction found — refund will restock only',
+      );
+    }
+
     const response = await client.request(`
       mutation refundCreate($input: RefundInput!) {
         refundCreate(input: $input) {
@@ -90,19 +138,7 @@ class RefundService {
           userErrors { field message }
         }
       }
-    `, {
-      variables: {
-        input: {
-          orderId: returnRecord.shopifyOrderId,
-          note: `ReturnFlow return #${returnRecord.id}`,
-          shipping: { fullRefund: false },
-          refundLineItems: returnRecord.items.map((item) => ({
-            lineItemId: item.shopifyLineItemId,
-            quantity: item.quantity,
-          })),
-        },
-      },
-    });
+    `, { variables: { input } });
 
     const errors = response.data?.refundCreate?.userErrors || [];
     if (errors.length > 0) {

@@ -52,14 +52,25 @@ describe('RefundService.processRefund — REFUND path', () => {
   it('calls refundCreate, updates status, emits REFUND_PROCESSED', async () => {
     prisma.return.findUnique.mockResolvedValue(ret({ resolution: 'REFUND', returnFee: 0 }));
     prisma.return.update.mockResolvedValue({});
-    shopifyClient.request.mockResolvedValue({
-      data: { refundCreate: { refund: { id: 'gid://shopify/Refund/9' }, userErrors: [] } },
-    });
+    shopifyClient.request
+      .mockResolvedValueOnce({
+        data: { order: { transactions: [{ id: 'gid://shopify/OrderTransaction/1', kind: 'SALE', status: 'SUCCESS', gateway: 'shopify_payments', amountSet: { shopMoney: { amount: '50.00' } } }] } },
+      })
+      .mockResolvedValueOnce({
+        data: { refundCreate: { refund: { id: 'gid://shopify/Refund/9' }, userErrors: [] } },
+      });
     const emit = jest.spyOn(eventBus, 'emit');
 
     const result = await RefundService.processRefund('ret_test_1');
 
-    expect(shopifyClient.request.mock.calls[0][0]).toMatch(/refundCreate/);
+    expect(shopifyClient.request.mock.calls[0][0]).toMatch(/orderTransactions/);
+    expect(shopifyClient.request.mock.calls[1][0]).toMatch(/refundCreate/);
+    // Regression: without a transactions array Shopify only restocks — no
+    // money moves. The refund must be issued against the original payment.
+    const input = shopifyClient.request.mock.calls[1][1].variables.input;
+    expect(input.transactions).toEqual([
+      expect.objectContaining({ parentId: 'gid://shopify/OrderTransaction/1', kind: 'REFUND', amount: '50' }),
+    ]);
     expect(result.shopifyRefundId).toBe('gid://shopify/Refund/9');
     expect(prisma.return.update).toHaveBeenCalledWith({
       where: { id: 'ret_test_1' },
@@ -110,6 +121,36 @@ describe('RefundService.processRefund — REFUND path', () => {
       expect(prisma.return.update.mock.calls[0][0].data.status).toBe('PROCESSED');
     },
   );
+
+  it('caps the refund transaction at the captured payment amount', async () => {
+    prisma.return.findUnique.mockResolvedValue(ret({ resolution: 'REFUND', totalValue: 80 }));
+    prisma.return.update.mockResolvedValue({});
+    shopifyClient.request
+      .mockResolvedValueOnce({
+        data: { order: { transactions: [{ id: 't1', kind: 'CAPTURE', status: 'SUCCESS', gateway: 'card', amountSet: { shopMoney: { amount: '60.00' } } }] } },
+      })
+      .mockResolvedValueOnce({
+        data: { refundCreate: { refund: { id: 'r' }, userErrors: [] } },
+      });
+
+    await RefundService.processRefund('ret_test_1');
+
+    const input = shopifyClient.request.mock.calls[1][1].variables.input;
+    expect(input.transactions[0].amount).toBe('60');
+  });
+
+  it('falls back to restock-only when no successful payment transaction exists', async () => {
+    prisma.return.findUnique.mockResolvedValue(ret({ resolution: 'REFUND' }));
+    prisma.return.update.mockResolvedValue({});
+    shopifyClient.request
+      .mockResolvedValueOnce({ data: { order: { transactions: [] } } })
+      .mockResolvedValueOnce({ data: { refundCreate: { refund: { id: 'r' }, userErrors: [] } } });
+
+    await RefundService.processRefund('ret_test_1');
+
+    const input = shopifyClient.request.mock.calls[1][1].variables.input;
+    expect(input.transactions).toBeUndefined();
+  });
 
   it('still calls Shopify for a real order gid', async () => {
     prisma.return.findUnique.mockResolvedValue(ret({ resolution: 'REFUND', shopifyOrderId: 'gid://shopify/Order/123456789' }));

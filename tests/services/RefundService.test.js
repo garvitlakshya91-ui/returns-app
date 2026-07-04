@@ -93,6 +93,35 @@ describe('RefundService.processRefund — REFUND path', () => {
     expect(prisma.return.update.mock.calls[0][0].data.status).toBe('PROCESSED');
   });
 
+  // Regression for the Shopify review rejection: returns stored with a
+  // placeholder order id ('pending') were passed straight into refundCreate,
+  // which 500'd with "Invalid global id 'pending'". Any non-real order gid
+  // must be processed locally, never sent to Shopify.
+  it.each(['pending', 'gid://shopify/Order/demo', ''])(
+    'processes returns with non-real order id %j locally, without calling Shopify',
+    async (orderId) => {
+      prisma.return.findUnique.mockResolvedValue(ret({ resolution: 'REFUND', shopifyOrderId: orderId }));
+      prisma.return.update.mockResolvedValue({});
+
+      const result = await RefundService.processRefund('ret_test_1');
+
+      expect(shopifyClient.request).not.toHaveBeenCalled();
+      expect(result.success).toBe(true);
+      expect(prisma.return.update.mock.calls[0][0].data.status).toBe('PROCESSED');
+    },
+  );
+
+  it('still calls Shopify for a real order gid', async () => {
+    prisma.return.findUnique.mockResolvedValue(ret({ resolution: 'REFUND', shopifyOrderId: 'gid://shopify/Order/123456789' }));
+    prisma.return.update.mockResolvedValue({});
+    shopifyClient.request.mockResolvedValue({
+      data: { refundCreate: { refund: { id: 'r' }, userErrors: [] } },
+    });
+
+    await RefundService.processRefund('ret_test_1');
+    expect(shopifyClient.request).toHaveBeenCalled();
+  });
+
   it('never refunds a negative amount when the fee exceeds item value', async () => {
     prisma.return.findUnique.mockResolvedValue(ret({ resolution: 'REFUND', totalValue: 3, returnFee: 5 }));
     prisma.return.update.mockResolvedValue({});

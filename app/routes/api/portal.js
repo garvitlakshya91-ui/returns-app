@@ -137,10 +137,17 @@ router.post('/lookup', lookupLimiter, async (req, res) => {
  */
 router.post('/returns', createReturnLimiter, loadShopFromBody, planGate('createReturn'), async (req, res) => {
   try {
-    const { shopId, items, resolution, customerEmail } = req.body;
+    const { shopId, items, resolution, customerEmail, orderId, orderName } = req.body;
 
     if (!items?.length || !resolution) {
       return res.status(400).json({ error: 'items and resolution are required' });
+    }
+
+    // The return must be tied to the order found in the lookup step — without
+    // a real order id the merchant can never process the refund later. (The
+    // old silent 'pending' fallback produced returns that 500'd on refund.)
+    if (!orderId) {
+      return res.status(400).json({ error: 'orderId is required — please start again from the order lookup step' });
     }
 
     if (resolution === 'EXCHANGE') {
@@ -156,8 +163,8 @@ router.post('/returns', createReturnLimiter, loadShopFromBody, planGate('createR
 
     const returnRecord = await ReturnService.createReturn({
       shopId,
-      shopifyOrderId: req.body.orderId || 'pending',
-      shopifyOrderName: req.body.orderName || 'pending',
+      shopifyOrderId: orderId,
+      shopifyOrderName: orderName || 'unknown',
       customerEmail: customerEmail || 'unknown@email.com',
       customerName: req.body.customerName || 'Customer',
       items,

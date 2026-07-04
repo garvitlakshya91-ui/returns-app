@@ -38,6 +38,8 @@ export default function ConfirmationPage({ data }) {
       const returnResult = await createReturn({
         shopId: data.shopId,
         shopSlug,
+        orderId: data.order?.orderId,
+        orderName: data.order?.orderName,
         customerEmail: data.order?.email,
         items: items.map((item) => ({
           lineItemId: item.lineItemId,

@@ -27,15 +27,22 @@ class RefundService {
     // exceeds the item value.
     const refundAmount = Math.max(0, totalValue - fee);
 
-    // Demo / test-mode returns have no real Shopify order, so skip the Shopify
-    // mutation and just mark them processed — lets merchants walk the full flow.
-    if (returnRecord.shopifyOrderId === 'demo') {
+    // A refund can only go through Shopify when the return is tied to a real
+    // order gid. Anything else — the admin demo return ('demo'), the portal
+    // demo seed ('gid://shopify/Order/demo'), or legacy rows created before
+    // order ids were mandatory ('pending') — is processed locally instead of
+    // being sent to Shopify's API, which would reject it with a 500.
+    const REAL_ORDER_GID = /^gid:\/\/shopify\/Order\/\d+$/;
+    if (!REAL_ORDER_GID.test(returnRecord.shopifyOrderId)) {
       await prisma.return.update({
         where: { id: returnId },
         data: { status: 'PROCESSED', refundAmount, processedAt: new Date() },
       });
       eventBus.emit(REFUND_PROCESSED, { returnId, refundAmount, resolution });
-      logger.info({ returnId, resolution, refundAmount }, 'Demo return processed (no Shopify call)');
+      logger.info(
+        { returnId, resolution, refundAmount, shopifyOrderId: returnRecord.shopifyOrderId },
+        'Return without a real Shopify order processed locally (no Shopify call)',
+      );
       return { success: true, type: resolution, demo: true, amount: refundAmount };
     }
 

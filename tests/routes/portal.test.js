@@ -147,7 +147,7 @@ describe('POST /api/portal/returns', () => {
     prisma.shop.findUnique.mockResolvedValue(fakeShop({ plan: 'FREE', returnCount: 0 }));
     const res = await request(app)
       .post('/api/portal/returns')
-      .send({ shopId: 'shop_test_1', items: [{ quantity: 1 }], resolution: 'EXCHANGE' });
+      .send({ shopId: 'shop_test_1', orderId: 'gid://shopify/Order/1001', items: [{ quantity: 1 }], resolution: 'EXCHANGE' });
     expect(res.status).toBe(403);
     expect(res.body.error).toMatch(/Starter/);
   });
@@ -160,12 +160,28 @@ describe('POST /api/portal/returns', () => {
     expect(res.status).toBe(400);
   });
 
+  it('400 when orderId is missing (the old silent "pending" fallback made refunds 500)', async () => {
+    prisma.shop.findUnique.mockResolvedValue(fakeShop({ plan: 'GROWTH' }));
+    const res = await request(app)
+      .post('/api/portal/returns')
+      .send({
+        shopId: 'shop_test_1',
+        items: [{ lineItemId: 'li1', productTitle: 'Tee', quantity: 1, unitPrice: 20, reason: 'doesnt_fit' }],
+        resolution: 'REFUND',
+        customerEmail: 'jane@x.com',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/orderId/);
+  });
+
   it('201 creates return on the happy path', async () => {
     prisma.shop.findUnique.mockResolvedValue(fakeShop({ plan: 'GROWTH' }));
     const res = await request(app)
       .post('/api/portal/returns')
       .send({
         shopId: 'shop_test_1',
+        orderId: 'gid://shopify/Order/1001',
+        orderName: '#1001',
         items: [{ lineItemId: 'li1', productTitle: 'Tee', quantity: 1, unitPrice: 20, reason: 'doesnt_fit' }],
         resolution: 'REFUND',
         customerEmail: 'jane@x.com',

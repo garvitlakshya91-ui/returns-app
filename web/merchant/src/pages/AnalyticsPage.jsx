@@ -127,7 +127,11 @@ export default function AnalyticsPage() {
       }
     } catch (err) {
       console.error('Upgrade error:', err);
-      setError('Could not start the upgrade. Please try again.');
+      // Show the server's reason when it gives one — a bare generic message
+      // leaves merchants (and app reviewers) with nothing to act on.
+      setError(err.message && err.message !== 'Request failed'
+        ? `Could not start the upgrade: ${err.message}`
+        : 'Could not start the upgrade. Please try again.');
     } finally {
       setUpgrading(false);
     }

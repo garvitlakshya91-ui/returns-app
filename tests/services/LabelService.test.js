@@ -1,4 +1,4 @@
-const { fakeShop } = require('../helpers');
+const { fakeShop, fakeReturn } = require('../helpers');
 const { encrypt } = require('../../app/utils/encryption');
 
 let LabelService;
@@ -59,6 +59,80 @@ describe('LabelService.getCarrierAdapter — selection', () => {
     });
     const adapter = LabelService.getCarrierAdapter(shop, 'evri');
     expect(adapter.config.credentials).toEqual(creds);
+  });
+});
+
+describe('LabelService.resolveAddresses — real store data on labels', () => {
+  function withShopTokenMock(requestImpl) {
+    jest.resetModules();
+    const requestMock = jest.fn(requestImpl);
+    jest.doMock('../../app/services/ShopToken', () => ({
+      graphqlClient: jest.fn().mockResolvedValue({ request: requestMock }),
+    }));
+    return { LS: require('../../app/services/LabelService'), requestMock };
+  }
+
+  const shopifyAddresses = {
+    data: {
+      shop: {
+        billingAddress: {
+          address1: '12 Warehouse Way', address2: 'Unit 4', city: 'Manchester',
+          zip: 'M1 2AB', provinceCode: null, countryCodeV2: 'GB', phone: '0161 000 000',
+        },
+      },
+      order: {
+        shippingAddress: {
+          name: 'Jane Doe', address1: '5 Customer Close', address2: null, city: 'Leeds',
+          zip: 'LS1 4AB', provinceCode: null, countryCodeV2: 'GB', phone: '07000 000000',
+        },
+      },
+    },
+  };
+
+  it("uses the order's real shipping address and the store's real address", async () => {
+    const { LS, requestMock } = withShopTokenMock(async () => shopifyAddresses);
+    const shop = fakeShop({ settings: {} });
+    const ret = fakeReturn({ shopifyOrderId: 'gid://shopify/Order/1005' });
+
+    const { senderAddress, recipientAddress } = await LS.resolveAddresses(shop, ret);
+
+    expect(requestMock).toHaveBeenCalledTimes(1);
+    expect(requestMock.mock.calls[0][1].variables).toMatchObject({
+      orderId: 'gid://shopify/Order/1005', withOrder: true,
+    });
+    expect(senderAddress).toMatchObject({
+      name: 'Jane Doe', line1: '5 Customer Close', city: 'Leeds', postcode: 'LS1 4AB', country: 'GB',
+    });
+    expect(recipientAddress).toMatchObject({
+      line1: '12 Warehouse Way', city: 'Manchester', postcode: 'M1 2AB', country: 'GB',
+    });
+  });
+
+  it('merchant-entered warehouse settings override the store address', async () => {
+    const { LS } = withShopTokenMock(async () => shopifyAddresses);
+    const shop = fakeShop({
+      settings: { warehouseLine1: '99 Override Rd', warehouseCity: 'Bristol', warehousePostcode: 'BS1 1AA' },
+    });
+    const { recipientAddress } = await LS.resolveAddresses(shop, fakeReturn());
+    expect(recipientAddress).toMatchObject({ line1: '99 Override Rd', city: 'Bristol', postcode: 'BS1 1AA' });
+  });
+
+  it('skips the order lookup for demo returns but still uses the store address', async () => {
+    const { LS, requestMock } = withShopTokenMock(async () => ({
+      data: { shop: shopifyAddresses.data.shop },
+    }));
+    const ret = fakeReturn({ shopifyOrderId: 'demo' });
+    const { senderAddress, recipientAddress } = await LS.resolveAddresses(fakeShop({ settings: {} }), ret);
+    expect(requestMock.mock.calls[0][1].variables.withOrder).toBe(false);
+    expect(senderAddress).toEqual({ name: 'Jane Doe', country: 'GB' });
+    expect(recipientAddress.line1).toBe('12 Warehouse Way');
+  });
+
+  it('degrades to name-only sender and placeholder recipient when the lookup fails', async () => {
+    const { LS } = withShopTokenMock(async () => { throw new Error('shopify down'); });
+    const { senderAddress, recipientAddress } = await LS.resolveAddresses(fakeShop({ settings: {} }), fakeReturn());
+    expect(senderAddress).toEqual({ name: 'Jane Doe', country: 'GB' });
+    expect(recipientAddress.line1).toBe('1 Returns Centre');
   });
 });
 

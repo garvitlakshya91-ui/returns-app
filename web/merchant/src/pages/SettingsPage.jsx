@@ -157,6 +157,11 @@ export default function SettingsPage() {
           <Card>
             <BlockStack gap="400">
               <Text variant="headingMd">Return Warehouse Address</Text>
+              <Text as="p" tone="subdued">
+                Where customers post their returns. Leave blank to use your
+                store&apos;s address from Shopify — set this only if returns go
+                somewhere different.
+              </Text>
               <TextField
                 label="Address line 1"
                 value={settings.warehouseLine1 || ''}

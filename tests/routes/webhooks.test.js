@@ -112,7 +112,8 @@ describe('app/uninstalled wipes the token', () => {
     await new Promise((r) => setImmediate(r));
     expect(prisma.shop.update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: 'shop_1' },
-      data: expect.objectContaining({ shopifyToken: '' }),
+      // plan reset means a reinstall must re-approve charges (1.2.2)
+      data: expect.objectContaining({ shopifyToken: '', plan: 'FREE' }),
     }));
   });
 });

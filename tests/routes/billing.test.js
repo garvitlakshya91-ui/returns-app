@@ -82,6 +82,66 @@ describe('POST /api/admin/billing/subscribe — paid plan', () => {
   });
 });
 
+describe('POST /api/admin/billing/subscribe — test vs real charges', () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+  afterEach(() => { process.env.NODE_ENV = originalNodeEnv; });
+
+  const subscriptionOk = {
+    data: {
+      appSubscriptionCreate: {
+        confirmationUrl: 'https://shop/confirm/t',
+        appSubscription: { id: 'gid://shopify/AppSubscription/9', status: 'PENDING' },
+        userErrors: [],
+      },
+    },
+  };
+
+  it('creates a TEST charge for development stores even in production (review store fix)', async () => {
+    process.env.NODE_ENV = 'production';
+    shopifyClient.request
+      .mockResolvedValueOnce({ data: { shop: { plan: { partnerDevelopment: true } } } })
+      .mockResolvedValueOnce(subscriptionOk);
+
+    const res = await request(app).post('/api/admin/billing/subscribe').send({ plan: 'STARTER' });
+    expect(res.status).toBe(200);
+    const vars = shopifyClient.request.mock.calls[1][1].variables;
+    expect(vars.test).toBe(true);
+  });
+
+  it('creates a REAL charge for regular stores in production', async () => {
+    process.env.NODE_ENV = 'production';
+    shopifyClient.request
+      .mockResolvedValueOnce({ data: { shop: { plan: { partnerDevelopment: false } } } })
+      .mockResolvedValueOnce(subscriptionOk);
+
+    const res = await request(app).post('/api/admin/billing/subscribe').send({ plan: 'STARTER' });
+    expect(res.status).toBe(200);
+    const vars = shopifyClient.request.mock.calls[1][1].variables;
+    expect(vars.test).toBe(false);
+  });
+
+  it('falls back to a real charge when the store-type lookup fails', async () => {
+    process.env.NODE_ENV = 'production';
+    shopifyClient.request
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce(subscriptionOk);
+
+    const res = await request(app).post('/api/admin/billing/subscribe').send({ plan: 'STARTER' });
+    expect(res.status).toBe(200);
+    const vars = shopifyClient.request.mock.calls[1][1].variables;
+    expect(vars.test).toBe(false);
+  });
+
+  it('stays a test charge outside production without querying the store type', async () => {
+    shopifyClient.request.mockResolvedValueOnce(subscriptionOk);
+
+    const res = await request(app).post('/api/admin/billing/subscribe').send({ plan: 'STARTER' });
+    expect(res.status).toBe(200);
+    expect(shopifyClient.request).toHaveBeenCalledTimes(1);
+    expect(shopifyClient.request.mock.calls[0][1].variables.test).toBe(true);
+  });
+});
+
 describe('POST /api/admin/billing/subscribe — downgrade to FREE', () => {
   it('cancels the active subscription and drops to FREE', async () => {
     shopifyClient.request

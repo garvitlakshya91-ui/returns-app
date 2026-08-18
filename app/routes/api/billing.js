@@ -58,6 +58,12 @@ router.post('/subscribe', async (req, res) => {
     const price = isAnnual ? BillingService.annualAmount(plan) : planConfig.amount;
     const billingInterval = isAnnual ? 'ANNUAL' : 'EVERY_30_DAYS';
 
+    // Development stores (the App Store review store included) can only
+    // approve TEST charges — a real charge fails with "Could not start the
+    // upgrade". Regular stores in production get real charges.
+    const isTestCharge = process.env.NODE_ENV !== 'production'
+      || await BillingService.isDevelopmentStore(client);
+
     const response = await client.request(`
       mutation AppSubscriptionCreate(
         $name: String!,
@@ -95,12 +101,13 @@ router.post('/subscribe', async (req, res) => {
           BillingService.usagePricingLineItem(),
         ],
         trialDays: BillingService.TRIAL_DAYS,
-        test: process.env.NODE_ENV !== 'production',
+        test: isTestCharge,
       },
     });
 
     const errors = response.data?.appSubscriptionCreate?.userErrors || [];
     if (errors.length > 0) {
+      logger.warn({ shop: req.shopDomain, errors }, 'appSubscriptionCreate userErrors');
       return res.status(400).json({ error: errors.map((e) => e.message).join(', ') });
     }
 

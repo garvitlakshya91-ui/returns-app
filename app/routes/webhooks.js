@@ -99,6 +99,10 @@ router.post('/app/uninstalled', async (req, res) => {
       where: { id: shop.id },
       data: {
         shopifyToken: '',
+        // Shopify cancels the subscription on uninstall. Dropping to FREE here
+        // means a reinstall must request charge approval again (App Store
+        // requirement 1.2.2) instead of resuming a paid plan nobody pays for.
+        plan: 'FREE',
         settings: { uninstalledAt: new Date().toISOString() },
       },
     });

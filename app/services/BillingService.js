@@ -69,6 +69,23 @@ function graphqlClient(shop) {
 }
 
 /**
+ * Development stores can only approve TEST charges — creating a real charge
+ * there fails, which is exactly what the App Store reviewer hits when they
+ * try to upgrade on their review store. Detect them so subscribe can flip the
+ * `test` flag. Fails safe: if the store type can't be determined, treat it as
+ * a regular store (real charge in production).
+ */
+async function isDevelopmentStore(client) {
+  try {
+    const resp = await client.request('{ shop { plan { partnerDevelopment } } }');
+    return Boolean(resp.data?.shop?.plan?.partnerDevelopment);
+  } catch (err) {
+    logger.warn({ err: err.message }, 'Could not determine store type for billing; assuming regular store');
+    return false;
+  }
+}
+
+/**
  * Query Shopify for the merchant's current ACTIVE app subscription.
  * Returns { id, name, status } or null. This is the source of truth — never
  * trust a client-supplied plan when deciding what the merchant actually pays.
@@ -201,6 +218,7 @@ module.exports = {
   planKeyFromName,
   usagePricingLineItem,
   graphqlClient,
+  isDevelopmentStore,
   getActiveSubscription,
   cancelSubscription,
   applySubscriptionStatus,

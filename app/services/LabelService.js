@@ -4,7 +4,12 @@ const eventBus = require('../events/eventBus');
 const { LABEL_GENERATED, LABEL_FAILED } = require('../events/emitters');
 const { decrypt } = require('../utils/encryption');
 const StorageService = require('./StorageService');
+const ShopToken = require('./ShopToken');
 const logger = require('../utils/logger');
+
+// Same guard RefundService uses: only real Shopify order gids can be looked
+// up on the API. Demo/legacy returns skip the order fetch.
+const REAL_ORDER_GID = /^gid:\/\/shopify\/Order\/\d+$/;
 
 class LabelService {
   /**
@@ -31,19 +36,7 @@ class LabelService {
     const isManagedPlatform = ['shippo', 'shipengine'].includes(activeConfig?.carrier)
       && !activeConfig?.credentials?.encrypted;
 
-    const settings = shop.settings || {};
-    const recipientAddress = {
-      name: shop.name,
-      line1: settings.warehouseLine1 || '1 Returns Centre',
-      city: settings.warehouseCity || 'London',
-      postcode: settings.warehousePostcode || 'EC1A 1BB',
-      country: 'GB',
-    };
-
-    const senderAddress = {
-      name: returnRecord.customerName,
-      country: 'GB',
-    };
+    const { senderAddress, recipientAddress } = await LabelService.resolveAddresses(shop, returnRecord);
 
     const weight = returnRecord.items.reduce((sum, item) => sum + item.quantity * 0.5, 0);
 
@@ -137,6 +130,93 @@ class LabelService {
       eventBus.emit(LABEL_FAILED, { returnId, error: err.message });
       throw err;
     }
+  }
+
+  /**
+   * Real addresses for the label. The parcel travels customer → warehouse:
+   *  - sender: the order's actual shipping address, fetched live from Shopify
+   *  - recipient: the merchant's warehouse address from Settings, else the
+   *    store's own address on Shopify
+   * Falls back to minimal placeholders only when Shopify has nothing to give
+   * (demo returns, missing token), so label generation never fails on lookup.
+   */
+  static async resolveAddresses(shop, returnRecord) {
+    const settings = shop.settings || {};
+    let orderShipping = null;
+    let storeAddress = null;
+
+    const hasRealOrder = REAL_ORDER_GID.test(returnRecord.shopifyOrderId || '');
+    if (shop.shopifyToken) {
+      try {
+        const client = await ShopToken.graphqlClient(shop);
+        const resp = await client.request(`
+          query LabelAddresses($orderId: ID!, $withOrder: Boolean!) {
+            shop {
+              billingAddress { address1 address2 city zip provinceCode countryCodeV2 phone }
+            }
+            order: node(id: $orderId) @include(if: $withOrder) {
+              ... on Order {
+                shippingAddress { name address1 address2 city zip provinceCode countryCodeV2 phone }
+              }
+            }
+          }
+        `, {
+          variables: {
+            orderId: hasRealOrder ? returnRecord.shopifyOrderId : 'gid://shopify/Order/0',
+            withOrder: hasRealOrder,
+          },
+        });
+        orderShipping = resp.data?.order?.shippingAddress || null;
+        storeAddress = resp.data?.shop?.billingAddress || null;
+      } catch (err) {
+        logger.warn({ err: err.message, returnId: returnRecord.id }, 'Address lookup failed — using stored fallbacks');
+      }
+    }
+
+    const senderAddress = orderShipping?.address1
+      ? {
+        name: orderShipping.name || returnRecord.customerName,
+        line1: orderShipping.address1,
+        line2: orderShipping.address2 || '',
+        city: orderShipping.city || '',
+        postcode: orderShipping.zip || '',
+        state: orderShipping.provinceCode || '',
+        country: orderShipping.countryCodeV2 || 'GB',
+        phone: orderShipping.phone || '',
+        email: returnRecord.customerEmail || '',
+      }
+      : { name: returnRecord.customerName, country: 'GB' };
+
+    // Warehouse settings (merchant-entered) win; otherwise the store's real
+    // address; the generic placeholder survives only when neither exists.
+    const recipientAddress = settings.warehouseLine1
+      ? {
+        name: shop.name,
+        line1: settings.warehouseLine1,
+        city: settings.warehouseCity || '',
+        postcode: settings.warehousePostcode || '',
+        country: 'GB',
+      }
+      : storeAddress?.address1
+        ? {
+          name: shop.name,
+          line1: storeAddress.address1,
+          line2: storeAddress.address2 || '',
+          city: storeAddress.city || '',
+          postcode: storeAddress.zip || '',
+          state: storeAddress.provinceCode || '',
+          country: storeAddress.countryCodeV2 || 'GB',
+          phone: storeAddress.phone || '',
+        }
+        : {
+          name: shop.name,
+          line1: '1 Returns Centre',
+          city: 'London',
+          postcode: 'EC1A 1BB',
+          country: 'GB',
+        };
+
+    return { senderAddress, recipientAddress };
   }
 
   /**

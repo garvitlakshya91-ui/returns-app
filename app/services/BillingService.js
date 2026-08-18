@@ -50,7 +50,8 @@ function subscriptionName(planKey, interval = 'monthly') {
 
 /**
  * Map a Shopify subscription name back to a plan key. Tolerant of casing, a
- * missing "ReturnFlow" prefix, and an "(Annual)" suffix.
+ * missing "ReturnFlow" prefix, an "(Annual)" suffix, and trailing text after
+ * the plan word (managed-pricing plan names like "Starter — £9/month").
  */
 function planKeyFromName(name) {
   if (!name) return null;
@@ -59,7 +60,8 @@ function planKeyFromName(name) {
     .replace(/\s*\(annual\)\s*$/i, '')
     .trim()
     .toLowerCase();
-  const entry = Object.entries(PLANS).find(([, p]) => p.name.toLowerCase() === cleaned);
+  const entry = Object.entries(PLANS).find(([, p]) => p.name.toLowerCase() === cleaned)
+    || Object.entries(PLANS).find(([, p]) => new RegExp(`^${p.name}([^a-z]|$)`, 'i').test(cleaned));
   return entry ? entry[0] : null;
 }
 

@@ -253,6 +253,9 @@ describe('BillingService.planKeyFromName', () => {
     const BillingService = require('../../app/services/BillingService');
     expect(BillingService.planKeyFromName('ReturnFlow Growth')).toBe('GROWTH');
     expect(BillingService.planKeyFromName('returnflow starter')).toBe('STARTER');
+    // Managed-pricing plan names may carry trailing text after the plan word.
+    expect(BillingService.planKeyFromName('Starter — £9/month')).toBe('STARTER');
+    expect(BillingService.planKeyFromName('Growth ($29/mo)')).toBe('GROWTH');
     expect(BillingService.planKeyFromName('Unknown thing')).toBeNull();
     expect(BillingService.planKeyFromName(null)).toBeNull();
   });

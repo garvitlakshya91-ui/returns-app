@@ -9,6 +9,18 @@ const { PLANS } = BillingService;
 const router = Router();
 router.use(verifyShopifySession);
 
+// When the app is opted into Shopify App Pricing (managed pricing) in the
+// Partner Dashboard, the Billing API refuses to create charges — Shopify hosts
+// the plan-selection page itself. Detect that refusal and hand the merchant
+// the hosted page instead, so the upgrade works in either configuration.
+const MANAGED_PRICING_RE = /managed pricing/i;
+const APP_HANDLE = process.env.SHOPIFY_APP_HANDLE || 'returns-app-garvit-20260613';
+
+function pricingPlansUrl(shopDomain) {
+  const storeHandle = String(shopDomain || '').replace('.myshopify.com', '');
+  return `https://admin.shopify.com/store/${storeHandle}/charges/${APP_HANDLE}/pricing_plans`;
+}
+
 /**
  * GET /api/admin/billing/plans
  */
@@ -108,6 +120,9 @@ router.post('/subscribe', async (req, res) => {
     const errors = response.data?.appSubscriptionCreate?.userErrors || [];
     if (errors.length > 0) {
       logger.warn({ shop: req.shopDomain, errors }, 'appSubscriptionCreate userErrors');
+      if (errors.some((e) => MANAGED_PRICING_RE.test(e.message))) {
+        return res.json({ redirectUrl: pricingPlansUrl(req.shopDomain) });
+      }
       return res.status(400).json({ error: errors.map((e) => e.message).join(', ') });
     }
 
@@ -117,6 +132,9 @@ router.post('/subscribe', async (req, res) => {
     });
   } catch (err) {
     logger.error({ err }, 'Billing subscribe error');
+    if (MANAGED_PRICING_RE.test(err.message || '')) {
+      return res.json({ redirectUrl: pricingPlansUrl(req.shopDomain) });
+    }
     res.status(500).json({ error: err.message || 'Failed to create subscription' });
   }
 });

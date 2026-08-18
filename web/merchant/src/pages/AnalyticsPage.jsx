@@ -119,11 +119,14 @@ export default function AnalyticsPage() {
   async function handleUpgrade() {
     setUpgrading(true);
     try {
-      const { confirmationUrl } = await billingApi.subscribe('GROWTH');
-      if (confirmationUrl) {
+      // confirmationUrl = Billing API approval screen; redirectUrl = Shopify's
+      // hosted plan-selection page (when the app uses Shopify App Pricing).
+      const { confirmationUrl, redirectUrl } = await billingApi.subscribe('GROWTH');
+      const target = confirmationUrl || redirectUrl;
+      if (target) {
         // Break out of the embedded iframe to Shopify's approval screen.
-        if (window.top) window.top.location.href = confirmationUrl;
-        else window.location.href = confirmationUrl;
+        if (window.top) window.top.location.href = target;
+        else window.location.href = target;
       }
     } catch (err) {
       console.error('Upgrade error:', err);

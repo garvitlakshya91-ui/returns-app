@@ -142,6 +142,51 @@ describe('POST /api/admin/billing/subscribe — test vs real charges', () => {
   });
 });
 
+describe('POST /api/admin/billing/subscribe — Shopify App Pricing (managed pricing)', () => {
+  const managedPricingError = 'Managed Pricing Apps cannot use the Billing API (to create charges).';
+  const hostedPlansUrl = 'https://admin.shopify.com/store/test-shop/charges/returns-app-garvit-20260613/pricing_plans';
+
+  it('returns the hosted plans page when Shopify refuses via userErrors', async () => {
+    shopifyClient.request.mockResolvedValueOnce({
+      data: {
+        appSubscriptionCreate: {
+          confirmationUrl: null,
+          appSubscription: null,
+          userErrors: [{ field: null, message: managedPricingError }],
+        },
+      },
+    });
+
+    const res = await request(app).post('/api/admin/billing/subscribe').send({ plan: 'GROWTH' });
+    expect(res.status).toBe(200);
+    expect(res.body.redirectUrl).toBe(hostedPlansUrl);
+  });
+
+  it('returns the hosted plans page when Shopify refuses with a thrown error', async () => {
+    shopifyClient.request.mockRejectedValueOnce(new Error(managedPricingError));
+
+    const res = await request(app).post('/api/admin/billing/subscribe').send({ plan: 'GROWTH' });
+    expect(res.status).toBe(200);
+    expect(res.body.redirectUrl).toBe(hostedPlansUrl);
+  });
+
+  it('still 400s on unrelated userErrors', async () => {
+    shopifyClient.request.mockResolvedValueOnce({
+      data: {
+        appSubscriptionCreate: {
+          confirmationUrl: null,
+          appSubscription: null,
+          userErrors: [{ field: 'price', message: 'Price must be positive' }],
+        },
+      },
+    });
+
+    const res = await request(app).post('/api/admin/billing/subscribe').send({ plan: 'GROWTH' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Price must be positive');
+  });
+});
+
 describe('POST /api/admin/billing/subscribe — downgrade to FREE', () => {
   it('cancels the active subscription and drops to FREE', async () => {
     shopifyClient.request

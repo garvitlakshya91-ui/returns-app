@@ -36,6 +36,9 @@ router.use(webhookVerification);
 // events and double-update state. X-Shopify-Webhook-Id is stable per delivery.
 router.use(async (req, res, next) => {
   const webhookId = req.headers['x-shopify-webhook-id'];
+  // No delivery id → nothing to dedup on. (Claiming the literal key
+  // "shopify:undefined" would swallow every later header-less webhook.)
+  if (!webhookId) return next();
   const isFirstTime = await claim(`shopify:${webhookId}`);
   if (!isFirstTime) {
     logger.info({ webhookId, path: req.path }, 'Shopify webhook duplicate — skipping');
@@ -103,7 +106,10 @@ router.post('/app/uninstalled', async (req, res) => {
         // means a reinstall must request charge approval again (App Store
         // requirement 1.2.2) instead of resuming a paid plan nobody pays for.
         plan: 'FREE',
-        settings: { uninstalledAt: new Date().toISOString() },
+        // Keep the merchant's configuration (branding, warehouse address,
+        // fulfilment dates) so a reinstall picks up where they left off;
+        // shop/redact wipes it for real 48h later if they don't come back.
+        settings: { ...(shop.settings || {}), uninstalledAt: new Date().toISOString() },
       },
     });
 

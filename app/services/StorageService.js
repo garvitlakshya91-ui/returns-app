@@ -16,6 +16,12 @@ function getClient() {
     logger.warn('R2 credentials not configured — storage disabled');
     return null;
   }
+  if (!process.env.R2_PUBLIC_URL) {
+    // Without a public base URL every stored object would be persisted with
+    // an unusable "undefined/..." link — treat as not configured.
+    logger.warn('R2_PUBLIC_URL not set — storage disabled');
+    return null;
+  }
   s3Client = new S3Client({
     region: 'auto',
     endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
@@ -48,7 +54,7 @@ class StorageService {
 
     return {
       key,
-      url: `${process.env.R2_PUBLIC_URL}/${key}`,
+      url: `${process.env.R2_PUBLIC_URL.replace(/\/$/, '')}/${key}`,
     };
   }
 
@@ -91,7 +97,7 @@ class StorageService {
     return {
       uploadUrl,
       key,
-      publicUrl: `${process.env.R2_PUBLIC_URL}/${key}`,
+      publicUrl: `${process.env.R2_PUBLIC_URL.replace(/\/$/, '')}/${key}`,
     };
   }
 

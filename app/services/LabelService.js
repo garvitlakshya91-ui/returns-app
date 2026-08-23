@@ -113,14 +113,21 @@ class LabelService {
       });
 
       // Bill the merchant for a real managed label (postage + service fee) via
-      // a Shopify usage charge. Non-fatal and skipped for simulated labels.
+      // a Shopify usage charge. Skipped for simulated labels. Isolated in its
+      // own try/catch: the label already exists and the return is LABEL_SENT,
+      // so a billing hiccup must never turn a successful label into
+      // LABEL_FAILED (which would also suppress the customer's label email).
       if (isManagedPlatform && !labelResult.simulated && Number(labelResult.cost) > 0) {
-        const BillingService = require('./BillingService');
-        const charge = Math.round((Number(labelResult.cost) + BillingService.LABEL_FEE_GBP) * 100) / 100;
-        await BillingService.recordLabelCharge(shop, {
-          amount: charge,
-          description: `Return label ${labelResult.carrier || adapter.carrierName} ${returnRecord.shopifyOrderName}`,
-        });
+        try {
+          const BillingService = require('./BillingService');
+          const charge = Math.round((Number(labelResult.cost) + BillingService.LABEL_FEE_GBP) * 100) / 100;
+          await BillingService.recordLabelCharge(shop, {
+            amount: charge,
+            description: `Return label ${labelResult.carrier || adapter.carrierName} ${returnRecord.shopifyOrderName}`,
+          });
+        } catch (billingErr) {
+          logger.warn({ err: billingErr.message, returnId }, 'Managed-label billing failed after label creation (non-fatal)');
+        }
       }
 
       eventBus.emit(LABEL_GENERATED, { returnId, labelId: label.id });

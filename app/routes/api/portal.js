@@ -23,6 +23,13 @@ const upload = multer({
   },
 });
 
+// Shopify search syntax: wrap a user-supplied value in double quotes, escaping
+// any quotes/backslashes inside it, and strip a leading '#' from order numbers.
+function quote(value) {
+  const v = String(value ?? '').trim().replace(/^#/, '').replace(/[\\"]/g, '\\$&');
+  return `"${v}"`;
+}
+
 /**
  * POST /api/portal/lookup
  * Look up a Shopify order by email + order number; return eligible items.
@@ -35,9 +42,16 @@ router.post('/lookup', lookupLimiter, async (req, res) => {
       return res.status(400).json({ error: 'email, orderNumber, and shopSlug are required' });
     }
 
+    // The slug is the first label of the myshopify domain (see settings.js).
+    // Match the exact domain — a substring match could resolve a short slug
+    // like "shop" to an arbitrary other merchant's store.
+    const slug = String(shopSlug).trim().toLowerCase().replace(/\.myshopify\.com$/, '');
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) {
+      return res.status(404).json({ error: 'Shop not found' });
+    }
     const shop = await prisma.shop.findFirst({
       where: {
-        shopifyDomain: { contains: shopSlug },
+        shopifyDomain: `${slug}.myshopify.com`,
         shopifyToken: { not: '' },
       },
       include: { policies: { where: { isActive: true } } },
@@ -74,7 +88,9 @@ router.post('/lookup', lookupLimiter, async (req, res) => {
         }
       }
     `, {
-      variables: { query: `name:${orderNumber} email:${email}` },
+      // Quote both values so spaces / search operators in user input can't
+      // change the meaning of the query.
+      variables: { query: `name:${quote(orderNumber)} email:${quote(email)}` },
     });
 
     const orders = response.data?.orders?.edges || [];
@@ -83,7 +99,7 @@ router.post('/lookup', lookupLimiter, async (req, res) => {
     }
 
     const orderData = orders[0].node;
-    if (orderData.email.toLowerCase() !== email.toLowerCase()) {
+    if ((orderData.email || '').toLowerCase() !== String(email).toLowerCase()) {
       return res.status(404).json({ error: 'Order not found. Please check your email and order number.' });
     }
 

@@ -80,6 +80,9 @@ class ExchangeService {
     }
 
     const draftOrder = response.data?.draftOrderCreate?.draftOrder;
+    if (!draftOrder?.id) {
+      throw new Error('Draft order error: Shopify returned no draft order');
+    }
 
     for (const item of exchangeItems) {
       await prisma.returnItem.update({
@@ -126,12 +129,16 @@ class ExchangeService {
       }
     `, { variables: { ids: variantIds } });
 
-    const unavailable = (response.data?.nodes || []).filter(
-      (n) => n && (!n.availableForSale || n.inventoryQuantity <= 0),
-    );
+    // nodes() returns null for a variant Shopify can't resolve (deleted /
+    // wrong id) — treat that as unavailable too, naming the id, rather than
+    // letting it fail later with a less specific draft-order error.
+    const nodes = response.data?.nodes || [];
+    const unavailable = nodes
+      .map((n, i) => (n ? n : { id: variantIds[i], displayName: `${variantIds[i]} (not found)`, missing: true }))
+      .filter((n) => n.missing || !n.availableForSale || n.inventoryQuantity <= 0);
 
     if (unavailable.length > 0) {
-      const names = unavailable.map((n) => n.displayName).join(', ');
+      const names = unavailable.map((n) => n.displayName || n.id).join(', ');
       throw new Error(`Exchange variants out of stock: ${names}`);
     }
   }

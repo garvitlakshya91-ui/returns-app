@@ -43,7 +43,7 @@ router.get('/', async (req, res) => {
  */
 router.post('/bulk', async (req, res) => {
   try {
-    const { action, ids, reason } = req.body;
+    const { action, ids, reason } = req.body || {};
     if (!Array.isArray(ids) || ids.length === 0) {
       return res.status(400).json({ error: 'ids must be a non-empty array' });
     }

@@ -13,7 +13,9 @@ router.use(verifyShopifySession);
 // Partner Dashboard, the Billing API refuses to create charges — Shopify hosts
 // the plan-selection page itself. Detect that refusal and hand the merchant
 // the hosted page instead, so the upgrade works in either configuration.
-const MANAGED_PRICING_RE = /managed pricing/i;
+// Shopify has used both wordings: "Managed Pricing Apps cannot use the
+// Billing API" and "Cannot use the Billing API ... when on Shopify App Pricing".
+const MANAGED_PRICING_RE = /managed pricing|app pricing/i;
 const APP_HANDLE = process.env.SHOPIFY_APP_HANDLE || 'returns-app-garvit-20260613';
 
 function pricingPlansUrl(shopDomain) {

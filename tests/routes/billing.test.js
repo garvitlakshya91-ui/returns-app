@@ -300,3 +300,27 @@ describe('BillingService.recordLabelCharge', () => {
     expect(shopifyClient.request).toHaveBeenCalledTimes(1); // no mutation attempted
   });
 });
+
+describe("POST /api/admin/billing/subscribe — App Pricing refusal wordings", () => {
+  it.each([
+    'Managed Pricing Apps cannot use the Billing API (to create charges).',
+    'Cannot use the Billing API (to create charges) when on Shopify App Pricing.',
+  ])('hands back the hosted plans page when Shopify says "%s"', async (message) => {
+    shopifyClient.request.mockResolvedValueOnce({
+      data: { appSubscriptionCreate: { confirmationUrl: null, appSubscription: null, userErrors: [{ field: null, message }] } },
+    });
+
+    const res = await request(app).post('/api/admin/billing/subscribe').send({ plan: 'GROWTH' });
+    expect(res.status).toBe(200);
+    expect(res.body.redirectUrl).toBe(
+      'https://admin.shopify.com/store/test-shop/charges/returns-app-garvit-20260613/pricing_plans',
+    );
+  });
+
+  it('also catches the refusal when it surfaces as a thrown error', async () => {
+    shopifyClient.request.mockRejectedValueOnce(new Error('GraphQL: Cannot use the Billing API when on Shopify App Pricing'));
+    const res = await request(app).post('/api/admin/billing/subscribe').send({ plan: 'STARTER' });
+    expect(res.status).toBe(200);
+    expect(res.body.redirectUrl).toContain('/pricing_plans');
+  });
+});

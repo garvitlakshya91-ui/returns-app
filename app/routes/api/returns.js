@@ -37,6 +37,38 @@ router.get('/', async (req, res) => {
 });
 
 /**
+ * GET /api/admin/returns/stats
+ * Dashboard totals over every return the shop has, not just the latest page.
+ */
+router.get('/stats', async (req, res) => {
+  try {
+    const where = { shopId: req.shopId };
+    const [byStatus, value, refunded, shop] = await Promise.all([
+      prisma.return.groupBy({ by: ['status'], where, _count: { _all: true } }),
+      prisma.return.aggregate({ where, _sum: { totalValue: true } }),
+      prisma.return.aggregate({ where: { ...where, status: 'PROCESSED' }, _sum: { refundAmount: true } }),
+      prisma.shop.findUnique({ where: { id: req.shopId }, select: { currency: true } }),
+    ]);
+    const counts = Object.fromEntries(byStatus.map((row) => [row.status, row._count._all]));
+    const total = Object.values(counts).reduce((sum, n) => sum + n, 0);
+    res.json({
+      total,
+      pending: counts.REQUESTED || 0,
+      inProgress: (counts.APPROVED || 0) + (counts.LABEL_SENT || 0) + (counts.IN_TRANSIT || 0)
+        + (counts.RECEIVED || 0) + (counts.INSPECTING || 0),
+      processed: counts.PROCESSED || 0,
+      rejected: counts.REJECTED || 0,
+      totalValue: Number(value._sum.totalValue || 0),
+      refundedValue: Number(refunded._sum.refundAmount || 0),
+      currency: shop?.currency || 'GBP',
+    });
+  } catch (err) {
+    console.error('Return stats error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
  * POST /api/admin/returns/bulk
  * Apply approve / reject / process to many returns at once. Each item is
  * handled independently — failures are reported, not fatal.

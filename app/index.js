@@ -276,6 +276,7 @@ require('./events/handlers/onReturnCreated');
 require('./events/handlers/onReturnApproved');
 require('./events/handlers/onLabelGenerated');
 require('./events/handlers/onRefundProcessed');
+require('./events/handlers/onShopInstalled');
 
 // ─── BullMQ workers ───
 if (process.env.REDIS_URL) {

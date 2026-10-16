@@ -6,6 +6,8 @@ const eventBus = require('../events/eventBus');
 const { SHOP_UNINSTALLED } = require('../events/emitters');
 const StorageService = require('../services/StorageService');
 const BillingService = require('../services/BillingService');
+const AnalyticsService = require('../services/AnalyticsService');
+const NotificationService = require('../services/NotificationService');
 const logger = require('../utils/logger');
 
 const router = Router();
@@ -160,29 +162,59 @@ router.post('/app_subscriptions/update', async (req, res) => {
 });
 
 // ─── GDPR mandatory webhooks (required for App Store) ───
+//
+// shopify.app.toml sends all three compliance topics to /webhooks, with the
+// topic in the X-Shopify-Topic header; the per-topic paths below are kept for
+// anything registered the old way. Both reach the same handlers.
 
 /**
- * POST /webhooks/customers/data_request
- * Merchant requests customer data export. We email the merchant within 30 days.
+ * customers/data_request — the merchant must hand the customer their data.
+ * We export every return the customer has with this shop as CSV, email it
+ * to the merchant, and note the request on each of those returns.
  */
+async function handleCustomerDataRequest(payload) {
+  const email = payload.customer?.email;
+  logger.info({ email, shop: payload.shop_domain }, 'GDPR data request received');
+  if (!email) return;
+
+  const shop = await prisma.shop.findUnique({ where: { shopifyDomain: payload.shop_domain } });
+  if (!shop) return;
+
+  const returns = await prisma.return.findMany({
+    where: { shopId: shop.id, customerEmail: { equals: email, mode: 'insensitive' } },
+    select: { id: true },
+  });
+  if (returns.length > 0) {
+    await prisma.returnEvent.createMany({
+      data: returns.map((r) => ({
+        returnId: r.id,
+        type: 'gdpr.data_request',
+        actor: 'system',
+        data: { customerEmail: email, shopifyRequestId: payload.data_request?.id || null, receivedAt: new Date().toISOString() },
+      })),
+    });
+  }
+
+  const csv = await AnalyticsService.exportCsv(shop.id, { customerEmail: email });
+  await NotificationService.sendEmail({
+    to: shop.email,
+    subject: `Customer data request: ${email}`,
+    template: 'DataRequest',
+    data: {
+      shopName: shop.name,
+      customerEmail: email,
+      returnCount: returns.length,
+      csv,
+      requestId: payload.data_request?.id || null,
+    },
+  });
+  logger.info({ email, shop: payload.shop_domain, returns: returns.length }, 'GDPR data request exported to merchant');
+}
+
 router.post('/customers/data_request', async (req, res) => {
   res.status(200).send('OK');
   try {
-    const payload = JSON.parse(req.rawBody);
-    const email = payload.customer?.email;
-    logger.info({ email, shop: payload.shop_domain }, 'GDPR data request received');
-
-    // Surface the request by writing an event — merchant can export via admin
-    await prisma.returnEvent.createMany({
-      data: [{
-        returnId: 'gdpr-request',
-        type: 'gdpr.data_request',
-        actor: 'system',
-        data: { email, shopDomain: payload.shop_domain, receivedAt: new Date().toISOString() },
-      }].filter(() => false), // Skip for now — no returnId FK; handle manually
-    }).catch(() => {});
-
-    // TODO: Email the merchant a CSV export of all returns matching this customer email
+    await handleCustomerDataRequest(JSON.parse(req.rawBody));
   } catch (err) {
     logger.error({ err }, 'customers/data_request error');
   }
@@ -192,10 +224,7 @@ router.post('/customers/data_request', async (req, res) => {
  * POST /webhooks/customers/redact
  * Anonymize customer data 30 days after a deletion request.
  */
-router.post('/customers/redact', async (req, res) => {
-  res.status(200).send('OK');
-  try {
-    const payload = JSON.parse(req.rawBody);
+async function handleCustomerRedact(payload) {
     const email = payload.customer?.email;
     if (!email) return;
 
@@ -222,6 +251,12 @@ router.post('/customers/redact', async (req, res) => {
     });
 
     logger.info({ shop: payload.shop_domain, returnsAffected: returns.length }, 'Customer data redacted');
+}
+
+router.post('/customers/redact', async (req, res) => {
+  res.status(200).send('OK');
+  try {
+    await handleCustomerRedact(JSON.parse(req.rawBody));
   } catch (err) {
     logger.error({ err }, 'customers/redact error');
   }
@@ -231,10 +266,7 @@ router.post('/customers/redact', async (req, res) => {
  * POST /webhooks/shop/redact
  * Full shop data deletion 48 hours after app uninstall.
  */
-router.post('/shop/redact', async (req, res) => {
-  res.status(200).send('OK');
-  try {
-    const payload = JSON.parse(req.rawBody);
+async function handleShopRedact(payload) {
     const shop = await prisma.shop.findUnique({
       where: { shopifyDomain: payload.shop_domain },
       include: { returns: { select: { id: true } } },
@@ -247,8 +279,37 @@ router.post('/shop/redact', async (req, res) => {
     await prisma.shop.delete({ where: { id: shop.id } });
 
     logger.info({ shop: payload.shop_domain }, 'Shop data redacted');
+}
+
+router.post('/shop/redact', async (req, res) => {
+  res.status(200).send('OK');
+  try {
+    await handleShopRedact(JSON.parse(req.rawBody));
   } catch (err) {
     logger.error({ err }, 'shop/redact error');
+  }
+});
+
+// The compliance destination configured in shopify.app.toml: one URL, the
+// topic in the header.
+const COMPLIANCE_HANDLERS = {
+  'customers/data_request': handleCustomerDataRequest,
+  'customers/redact': handleCustomerRedact,
+  'shop/redact': handleShopRedact,
+};
+
+router.post('/', async (req, res) => {
+  const topic = String(req.headers['x-shopify-topic'] || '').toLowerCase();
+  const handler = COMPLIANCE_HANDLERS[topic];
+  if (!handler) {
+    logger.warn({ topic }, 'Webhook for an unhandled topic at /webhooks');
+    return res.status(404).send('Unknown topic');
+  }
+  res.status(200).send('OK');
+  try {
+    await handler(JSON.parse(req.rawBody));
+  } catch (err) {
+    logger.error({ err, topic }, 'Compliance webhook error');
   }
 });
 

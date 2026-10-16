@@ -139,8 +139,8 @@ export default function PoliciesPage() {
     const parts = [];
     if (c.productTags?.length) parts.push(`tags: ${c.productTags.join(', ')}`);
     if (c.collections?.length) parts.push(`collections: ${c.collections.join(', ')}`);
-    if (c.minPrice != null) parts.push(`min £${c.minPrice}`);
-    if (c.maxPrice != null) parts.push(`max £${c.maxPrice}`);
+    if (c.minPrice != null) parts.push(`min ${c.minPrice}`);
+    if (c.maxPrice != null) parts.push(`max ${c.maxPrice}`);
     return parts.length ? parts.join(' · ') : 'Applies to all items';
   }
 
@@ -250,10 +250,10 @@ export default function PoliciesPage() {
             />
             <InlineStack gap="400">
               <div style={{ flex: 1 }}>
-                <TextField label="Min price (£)" type="number" value={form.minPrice} onChange={set('minPrice')} autoComplete="off" />
+                <TextField label="Min price (store currency)" type="number" value={form.minPrice} onChange={set('minPrice')} autoComplete="off" />
               </div>
               <div style={{ flex: 1 }}>
-                <TextField label="Max price (£)" type="number" value={form.maxPrice} onChange={set('maxPrice')} autoComplete="off" />
+                <TextField label="Max price (store currency)" type="number" value={form.maxPrice} onChange={set('maxPrice')} autoComplete="off" />
               </div>
             </InlineStack>
 
@@ -262,7 +262,7 @@ export default function PoliciesPage() {
             <Checkbox label="Store credit (gift card)" checked={form.allowStoreCredit} onChange={set('allowStoreCredit')} />
             <Checkbox label="Exchange for another item" checked={form.allowExchange} onChange={set('allowExchange')} />
 
-            <Text variant="headingSm" as="h3">Return fees (£)</Text>
+            <Text variant="headingSm" as="h3">Return fees (store currency)</Text>
             <Text tone="subdued" variant="bodySm">Deducted from the refund (or added to an exchange). Faulty, damaged, wrong or misdescribed items are always free to return under UK law.</Text>
             <InlineStack gap="400">
               <div style={{ flex: 1 }}>

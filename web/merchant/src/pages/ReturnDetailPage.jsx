@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Page,
@@ -19,6 +19,7 @@ import {
 } from '@shopify/polaris';
 import ReturnStatusBadge from '../components/ReturnStatusBadge';
 import { returnsApi } from '../api';
+import { formatMoney } from '../money';
 
 // Stored carrier codes → display names.
 const CARRIER_NAMES = { royalmail: 'Royal Mail', evri: 'Evri', inpost: 'InPost', dpd: 'DPD', dpduk: 'DPD', ups: 'UPS', dhl: 'DHL', yodel: 'Yodel', parcelforce: 'Parcelforce', shippo: 'Shippo', shipengine: 'ShipEngine' };
@@ -50,11 +51,16 @@ export default function ReturnDetailPage() {
   const [rejectReason, setRejectReason] = useState('');
   const [banner, setBanner] = useState(null);
 
-  useEffect(() => {
-    loadReturn();
+  const loadReturn = useCallback(async () => {
+    await fetchReturn();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  async function loadReturn() {
+  useEffect(() => {
+    loadReturn();
+  }, [loadReturn]);
+
+  async function fetchReturn() {
     try {
       const data = await returnsApi.get(id);
       setReturn(data);
@@ -180,11 +186,11 @@ export default function ReturnDetailPage() {
                 </BlockStack>
                 <BlockStack gap="100">
                   <Text tone="subdued" variant="bodySm">Total Value</Text>
-                  <Text>{'\u00A3'}{Number(ret.totalValue).toFixed(2)}</Text>
+                  <Text>{formatMoney(ret.totalValue, ret.currency)}</Text>
                 </BlockStack>
                 <BlockStack gap="100">
                   <Text tone="subdued" variant="bodySm">Refund Amount</Text>
-                  <Text>{ret.refundAmount ? `£${Number(ret.refundAmount).toFixed(2)}` : '—'}</Text>
+                  <Text>{ret.refundAmount ? formatMoney(ret.refundAmount, ret.currency) : '—'}</Text>
                 </BlockStack>
                 <BlockStack gap="100">
                   <Text tone="subdued" variant="bodySm">Created</Text>

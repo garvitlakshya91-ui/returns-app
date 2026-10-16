@@ -35,6 +35,7 @@ async function apiFetch(path, options = {}) {
 }
 
 export const returnsApi = {
+  stats: () => apiFetch('/returns/stats'),
   list: (params = {}) => {
     const qs = new URLSearchParams(params).toString();
     return apiFetch(`/returns${qs ? `?${qs}` : ''}`);
@@ -68,7 +69,25 @@ export const analyticsApi = {
   summary: (days = 30) => apiFetch(`/analytics/summary?days=${days}`),
   skus: (limit = 10) => apiFetch(`/analytics/skus?limit=${limit}`),
   trend: (days = 30) => apiFetch(`/analytics/trend?days=${days}`),
-  exportUrl: () => `${API_BASE}/analytics/export`,
+  // The export needs the session token, so it cannot be a plain link.
+  downloadExport: async () => {
+    const token = await getToken();
+    const res = await fetch(`${API_BASE}/analytics/export`, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Export failed' }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const name = (res.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'returns.csv';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 };
 
 export const billingApi = {

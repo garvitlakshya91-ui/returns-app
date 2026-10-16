@@ -114,7 +114,7 @@
     <a class="logo" href="/">Return<span>Flow</span></a>
     <div>
       <a class="btn btn-ghost" href="#pricing">Pricing</a>
-      <a class="btn btn-primary" href="https://apps.shopify.com/returns-app-garvit-20260613">Install on Shopify</a>
+      <a class="btn btn-primary" href="#install">Install on Shopify</a>
     </div>
   </nav>
 </div>
@@ -124,7 +124,7 @@
   <h1>Stop doing returns<br>by email.</h1>
   <p class="sub">ReturnFlow gives your customers a branded self-serve returns portal, generates Royal&nbsp;Mail &amp; Evri labels automatically, and lets you approve and refund in one click — inside Shopify.</p>
   <div class="cta-row">
-    <a class="btn btn-primary btn-lg" href="https://apps.shopify.com/returns-app-garvit-20260613">Install free — 2-minute setup</a>
+    <a class="btn btn-primary btn-lg" href="#install">Install free — 2-minute setup</a>
     <a class="btn btn-ghost" href="#how">See how it works ↓</a>
   </div>
   <p class="trust">Free up to 30 returns/month · No card required · 14-day trial on paid plans</p>
@@ -198,7 +198,7 @@
           <li>Refunds &amp; store credit</li>
           <li>Merchant dashboard + email notifications</li>
         </ul>
-        <a class="btn btn-primary" href="https://apps.shopify.com/returns-app-garvit-20260613">Install free</a>
+        <a class="btn btn-primary" href="#install">Install free</a>
       </div>
       <div class="plan featured">
         <span class="flag">Most popular</span>
@@ -212,7 +212,7 @@
           <li>Return reason charts + CSV export</li>
           <li>Bulk approve / reject / process</li>
         </ul>
-        <a class="btn btn-primary" href="https://apps.shopify.com/returns-app-garvit-20260613">Start free trial</a>
+        <a class="btn btn-primary" href="#install">Start free trial</a>
       </div>
       <div class="plan">
         <h3>Growth</h3>
@@ -224,7 +224,7 @@
           <li>Policy rules engine (tags, collections, fees)</li>
           <li>Priority support</li>
         </ul>
-        <a class="btn btn-primary" href="https://apps.shopify.com/returns-app-garvit-20260613">Start free trial</a>
+        <a class="btn btn-primary" href="#install">Start free trial</a>
       </div>
     </div>
     <p class="annual-note">Pay annually and get <b>2 months free</b>. All billing runs through Shopify — no separate card, cancel anytime.</p>
@@ -263,7 +263,7 @@
     <div class="final">
       <h2>Your next return could handle itself.</h2>
       <p>Install free, turn on managed labels, share your portal link. Done.</p>
-      <a class="btn btn-lg" href="https://apps.shopify.com/returns-app-garvit-20260613">Install ReturnFlow free</a>
+      <a class="btn btn-lg" href="#install">Install ReturnFlow free</a>
     </div>
   </div>
 </section>
@@ -273,5 +273,29 @@
   <p style="margin-top:6px;">Questions? <a href="mailto:support@returnsflow.uk">support@returnsflow.uk</a></p>
 </footer>
 
+<section id="install" class="wrap" style="padding:48px 0;text-align:center">
+  <h2>Install ReturnFlow on your store</h2>
+  <p class="sub">Enter your store's myshopify domain and we'll take you to Shopify to approve the install.</p>
+  <form id="install-form" style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:16px">
+    <input id="install-shop" type="text" placeholder="your-store.myshopify.com" required
+      style="padding:12px 14px;border:1px solid #ccc;border-radius:8px;min-width:280px;font-size:16px">
+    <button class="btn btn-primary" type="submit">Install on Shopify</button>
+  </form>
+  <p class="trust" style="margin-top:12px">Opens the official Shopify install screen for the ReturnFlow app.</p>
+</section>
+<script>
+  // Until the App Store listing is approved, the listing URL is a 404. The
+  // Shopify-managed install link works for any store that knows the app id.
+  document.getElementById('install-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var raw = document.getElementById('install-shop').value.trim().toLowerCase();
+    var handle = raw.replace(/^https?:\/\//, '').replace(/\.myshopify\.com.*$/, '').replace(/\/.*$/, '');
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(handle)) {
+      alert('Please enter your store domain, e.g. your-store.myshopify.com');
+      return;
+    }
+    window.location.href = 'https://admin.shopify.com/store/' + handle + '/oauth/install?client_id=56cf3e9878ee2a52551ea0921b4c6c67';
+  });
+</script>
 </body>
 </html>

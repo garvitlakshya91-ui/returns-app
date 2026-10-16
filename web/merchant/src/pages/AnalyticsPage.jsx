@@ -31,6 +31,7 @@ import {
 import MetricCard from '../components/MetricCard';
 import AppFooter from '../components/AppFooter';
 import { analyticsApi, billingApi } from '../api';
+import { formatMoney } from '../money';
 
 // Shown as a blurred teaser when a shop's plan doesn't include analytics, so
 // the page demonstrates the feature's value instead of looking like broken
@@ -67,8 +68,8 @@ const REASON_LABELS = {
   other: 'Other',
 };
 
-function formatGBP(amount) {
-  return `£${Number(amount || 0).toFixed(2)}`;
+function formatGBP(amount, currency) {
+  return formatMoney(amount, currency);
 }
 
 function formatDateShort(iso) {
@@ -144,8 +145,12 @@ export default function AnalyticsPage() {
     loadAnalytics();
   }, [loadAnalytics]);
 
-  function handleExport() {
-    window.location.href = analyticsApi.exportUrl();
+  async function handleExport() {
+    try {
+      await analyticsApi.downloadExport();
+    } catch (err) {
+      setError(`Export failed: ${err.message}`);
+    }
   }
 
   if (loading) {
@@ -263,13 +268,13 @@ export default function AnalyticsPage() {
         <Layout.Section>
           <InlineStack gap="400" wrap>
             <div style={{ flex: '1 1 200px' }}>
-              <MetricCard title="Total return value" value={formatGBP(summary?.totalValue)} />
+              <MetricCard title="Total return value" value={formatGBP(summary?.totalValue, summary?.currency)} />
             </div>
             <div style={{ flex: '1 1 200px' }}>
-              <MetricCard title="Refunded" value={formatGBP(summary?.refundedValue)} />
+              <MetricCard title="Refunded" value={formatGBP(summary?.refundedValue, summary?.currency)} />
             </div>
             <div style={{ flex: '1 1 200px' }}>
-              <MetricCard title="Revenue retained" value={formatGBP(summary?.revenueRetained)} />
+              <MetricCard title="Revenue retained" value={formatGBP(summary?.revenueRetained, summary?.currency)} />
             </div>
             <div style={{ flex: '1 1 200px' }}>
               <MetricCard
@@ -297,7 +302,7 @@ export default function AnalyticsPage() {
                         <XAxis dataKey="label" tick={{ fontSize: 12 }} />
                         <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
                         <Tooltip
-                          formatter={(value, name) => (name === 'value' ? formatGBP(value) : value)}
+                          formatter={(value, name) => (name === 'value' ? formatGBP(value, summary?.currency) : value)}
                           labelFormatter={(label) => `Date: ${label}`}
                         />
                         <Legend />
@@ -313,7 +318,7 @@ export default function AnalyticsPage() {
                         <Line
                           type="monotone"
                           dataKey="value"
-                          name="Value (£)"
+                          name="Value"
                           stroke="#50B83C"
                           strokeWidth={2}
                           dot={{ r: 3 }}

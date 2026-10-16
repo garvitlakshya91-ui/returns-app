@@ -22,12 +22,13 @@ import ReviewPrompt from '../components/ReviewPrompt';
 import ManagedLabelsCard from '../components/ManagedLabelsCard';
 import AppFooter from '../components/AppFooter';
 import { returnsApi } from '../api';
+import { formatMoney } from '../money';
 
 export default function DashboardPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [recentReturns, setRecentReturns] = useState([]);
-  const [stats, setStats] = useState({ total: 0, pending: 0, processed: 0, value: 0 });
+  const [stats, setStats] = useState({ total: 0, pending: 0, processed: 0, totalValue: 0, currency: 'GBP' });
 
   useEffect(() => {
     loadData();
@@ -35,17 +36,10 @@ export default function DashboardPage() {
 
   async function loadData() {
     try {
-      const data = await returnsApi.list({ limit: 5 });
+      // Totals come from every return the shop has; the table shows the latest five.
+      const [data, totals] = await Promise.all([returnsApi.list({ limit: 5 }), returnsApi.stats()]);
       setRecentReturns(data.returns || []);
-
-      // Calculate stats from returns
-      const all = data.returns || [];
-      setStats({
-        total: data.total || all.length,
-        pending: all.filter((r) => r.status === 'REQUESTED').length,
-        processed: all.filter((r) => r.status === 'PROCESSED').length,
-        value: all.reduce((sum, r) => sum + Number(r.totalValue || 0), 0),
-      });
+      setStats(totals);
     } catch (err) {
       console.error('Dashboard load error:', err);
       // Show empty state in dev
@@ -103,7 +97,7 @@ export default function DashboardPage() {
               <MetricCard title="Processed" value={stats.processed} icon={CheckCircleIcon} tone="success" />
             </div>
             <div style={{ flex: 1 }}>
-              <MetricCard title="Return Value" value={`£${stats.value.toFixed(2)}`} icon={CashDollarIcon} tone="default" />
+              <MetricCard title="Return Value" value={formatMoney(stats.totalValue, stats.currency)} icon={CashDollarIcon} tone="default" />
             </div>
           </InlineStack>
         </Layout.Section>
@@ -134,7 +128,7 @@ export default function DashboardPage() {
                     </Button>,
                     r.customerName,
                     <ReturnStatusBadge status={r.status} />,
-                    `£${Number(r.totalValue).toFixed(2)}`,
+                    formatMoney(r.totalValue, r.currency),
                     new Date(r.createdAt).toLocaleDateString('en-GB'),
                   ])}
                 />

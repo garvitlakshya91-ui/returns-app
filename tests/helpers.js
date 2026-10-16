@@ -18,6 +18,7 @@ const prismaMockFactory = () => ({
   },
   return: {
     create: jest.fn(),
+    groupBy: jest.fn(),
     findUnique: jest.fn(),
     findFirst: jest.fn(),
     findMany: jest.fn(),
@@ -35,6 +36,7 @@ const prismaMockFactory = () => ({
   },
   returnPolicy: {
     findMany: jest.fn(),
+    count: jest.fn(),
     findFirst: jest.fn(),
     create: jest.fn(),
     updateMany: jest.fn(),

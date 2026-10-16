@@ -10,39 +10,52 @@ beforeEach(() => {
 });
 
 describe('AnalyticsService.getSummary', () => {
-  it('returns counts, totals, and computed revenueRetained', async () => {
+  it('separates refunded, credited, exchanged and still-open value; retained = credit + exchanges', async () => {
     prisma.return.count
       .mockResolvedValueOnce(20) // total
       .mockResolvedValueOnce(15) // processed
       .mockResolvedValueOnce(2)  // rejected
       .mockResolvedValueOnce(3); // pending
-    prisma.return.aggregate.mockResolvedValue({
-      _sum: { totalValue: 1000, refundAmount: 600 },
-    });
+    prisma.return.aggregate
+      .mockResolvedValueOnce({ _sum: { totalValue: 1000 } })   // all value in period
+      .mockResolvedValueOnce({ _sum: { refundAmount: 600 } })  // cash refunds (PROCESSED + REFUND)
+      .mockResolvedValueOnce({ _sum: { refundAmount: 150 } })  // store credit issued
+      .mockResolvedValueOnce({ _sum: { totalValue: 90 } })     // exchanged
+      .mockResolvedValueOnce({ _sum: { totalValue: 160 } });   // still open
+    prisma.shop.findUnique.mockResolvedValue({ currency: 'USD' });
 
     const result = await AnalyticsService.getSummary('shop_test_1', 30);
 
     expect(result).toEqual({
       periodDays: 30,
+      currency: 'USD',
       totalReturns: 20,
       processedReturns: 15,
       rejectedReturns: 2,
       pendingReturns: 3,
       totalValue: 1000,
       refundedValue: 600,
-      revenueRetained: 400,
+      creditIssued: 150,
+      exchangedValue: 90,
+      pendingValue: 160,
+      revenueRetained: 240,
     });
+    const wheres = prisma.return.aggregate.mock.calls.map((c) => c[0].where);
+    expect(wheres[1]).toMatchObject({ status: 'PROCESSED', resolution: 'REFUND' });
+    expect(wheres[2]).toMatchObject({ status: 'PROCESSED', resolution: 'STORE_CREDIT' });
+    expect(wheres[3]).toMatchObject({ status: 'PROCESSED', resolution: 'EXCHANGE' });
+    expect(wheres[4]).toMatchObject({ status: { notIn: ['PROCESSED', 'REJECTED', 'CANCELLED'] } });
   });
 
-  it('treats nullish sums as zero', async () => {
+  it('treats nullish sums as zero and defaults the currency', async () => {
     prisma.return.count.mockResolvedValue(0);
-    prisma.return.aggregate.mockResolvedValue({
-      _sum: { totalValue: null, refundAmount: null },
-    });
+    prisma.return.aggregate.mockResolvedValue({ _sum: { totalValue: null, refundAmount: null } });
+    prisma.shop.findUnique.mockResolvedValue(null);
     const result = await AnalyticsService.getSummary('shop_test_1');
     expect(result.totalValue).toBe(0);
     expect(result.refundedValue).toBe(0);
     expect(result.revenueRetained).toBe(0);
+    expect(result.currency).toBe('GBP');
   });
 });
 

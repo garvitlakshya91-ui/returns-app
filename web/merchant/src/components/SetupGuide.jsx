@@ -11,7 +11,7 @@ import {
   Badge,
 } from '@shopify/polaris';
 import { CheckCircleIcon, MinusCircleIcon } from '@shopify/polaris-icons';
-import { settingsApi, carriersApi } from '../api';
+import { settingsApi, carriersApi, policiesApi } from '../api';
 
 // First-run onboarding checklist, shown on the Dashboard until the merchant
 // finishes setup (or dismisses it). Completion is derived from live data — no
@@ -21,16 +21,20 @@ export default function SetupGuide() {
   const [loading, setLoading] = useState(true);
   const [settings, setSettings] = useState({});
   const [hasCarrier, setHasCarrier] = useState(false);
+  const [hasPolicy, setHasPolicy] = useState(false);
   const [portalUrl, setPortalUrl] = useState('');
   const [copied, setCopied] = useState(false);
   const [dismissed, setDismissed] = useState(true); // assume hidden until loaded
 
   const load = useCallback(async () => {
     try {
-      const [settingsData, carriers] = await Promise.all([
+      const [settingsData, carriers, policies] = await Promise.all([
         settingsApi.get(),
         carriersApi.list().catch(() => []),
+        policiesApi.list().catch(() => []),
       ]);
+      const policyList = Array.isArray(policies) ? policies : (policies?.policies || []);
+      setHasPolicy(policyList.some((p) => p.isActive));
       const s = settingsData.settings || {};
       setSettings(s);
       setPortalUrl(settingsData.portalUrl || '');
@@ -63,6 +67,14 @@ export default function SetupGuide() {
       action: { label: 'Connect carrier', onClick: () => navigate('/settings') },
     },
     {
+      key: 'policy',
+      title: 'Have an active return policy',
+      description: 'Without one, no item on any order is returnable. A 30-day policy is created when you install.',
+      done: hasPolicy,
+      required: true,
+      action: { label: 'Review policies', onClick: () => navigate('/policies') },
+    },
+    {
       key: 'warehouse',
       title: 'Set your return address',
       description: 'Tell carriers where approved returns should be shipped back to.',
@@ -82,7 +94,7 @@ export default function SetupGuide() {
       key: 'share',
       title: 'Share your returns portal',
       description: portalUrl || 'Your portal link appears here once your shop domain is set.',
-      done: branded && warehouseSet && hasCarrier,
+      done: branded && warehouseSet && hasCarrier && hasPolicy,
       required: false,
       action: portalUrl
         ? {

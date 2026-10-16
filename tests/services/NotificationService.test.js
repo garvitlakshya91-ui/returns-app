@@ -57,7 +57,8 @@ describe('NotificationService named-template helpers', () => {
     await NotificationService.sendLabelReady(ret, label);
     const args = queue.add.mock.calls[0][1];
     expect(args.template).toBe('LabelReady');
-    expect(args.data.carrier).toBe('evri');
+    // The email shows the carrier's real name, not the stored code.
+    expect(args.data.carrier).toBe('Evri');
     expect(args.data.trackingCode).toBe('EVR1');
     expect(args.data.labelUrl).toBe('http://x');
   });

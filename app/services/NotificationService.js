@@ -1,5 +1,6 @@
 const { getQueue, QUEUE_NAMES } = require('../jobs/queue');
 const logger = require('../utils/logger');
+const { carrierDisplayName } = require('../utils/carrierName');
 
 class NotificationService {
   /**
@@ -111,7 +112,7 @@ class NotificationService {
         returnId: returnRecord.id,
         labelUrl: label.labelUrl,
         qrCodeUrl: label.qrCodeUrl,
-        carrier: label.carrier,
+        carrier: carrierDisplayName(label.carrier),
         trackingCode: label.trackingCode,
       },
     });

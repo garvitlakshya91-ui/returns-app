@@ -657,3 +657,99 @@ describe('LabelService.generateLabel — managed labels are only bought when the
     expect(buy).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+describe('LabelService.generateLabel — live labels need real addresses and record the booked carrier', () => {
+  const liveShippo = (generateLabel) => () => class {
+    get carrierName() { return 'royalmail'; }
+
+    get _isLive() { return true; }
+
+    async generateLabel(...args) { return generateLabel(...args); }
+  };
+  const managedShop = (settings = {}) => shopWith(
+    [{ carrier: 'shippo', isActive: true, credentials: {}, settings: {} }],
+    { settings },
+  );
+  const noStoreAddress = {
+    data: {
+      shop: { billingAddress: { address1: null, address2: null, city: null, zip: null, provinceCode: null, countryCodeV2: 'US', phone: null } },
+      order: shopifyAddressResponse.data.order,
+    },
+  };
+
+  it('refuses a live label when there is no returns address (no warehouse setting, no store address)', async () => {
+    const buy = jest.fn();
+    jest.doMock('../../app/services/carriers/ShippoAdapter', liveShippo(buy));
+    shopifyRequest.mockResolvedValue(noStoreAddress);
+    primeReturn({ shop: managedShop() });
+    load();
+    const failed = jest.fn();
+    eventBus.on(LABEL_FAILED, failed);
+
+    await expect(LabelService.generateLabel('ret_lbl_1')).rejects.toMatchObject({ code: 'LABEL_ADDRESS_MISSING' });
+
+    expect(buy).not.toHaveBeenCalled();
+    expect(prisma.returnLabel.create).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalledWith(expect.objectContaining({
+      code: 'LABEL_ADDRESS_MISSING',
+      error: expect.stringMatching(/returns address/i),
+    }));
+  });
+
+  it('uses the warehouse address from Settings when the store has none', async () => {
+    const buy = jest.fn().mockResolvedValue({ trackingCode: 'T1', labelUrl: null, cost: 2.75, carrier: 'Evri', simulated: false });
+    jest.doMock('../../app/services/carriers/ShippoAdapter', liveShippo(buy));
+    shopifyRequest.mockResolvedValue(noStoreAddress);
+    primeReturn({ shop: managedShop({ warehouseLine1: '5 Depot Road', warehouseCity: 'Leeds', warehousePostcode: 'LS2 7EY' }) });
+    load();
+
+    await LabelService.generateLabel('ret_lbl_1');
+
+    expect(buy).toHaveBeenCalledTimes(1);
+    expect(buy.mock.calls[0][0].recipientAddress).toMatchObject({ line1: '5 Depot Road', postcode: 'LS2 7EY' });
+  });
+
+  it('refuses a live label when the order has no shipping address to collect from', async () => {
+    const buy = jest.fn();
+    jest.doMock('../../app/services/carriers/ShippoAdapter', liveShippo(buy));
+    shopifyRequest.mockResolvedValue({ data: { shop: shopifyAddressResponse.data.shop, order: { shippingAddress: null } } });
+    primeReturn({ shop: managedShop() });
+    load();
+
+    await expect(LabelService.generateLabel('ret_lbl_1')).rejects.toThrow(/no shipping address/i);
+    expect(buy).not.toHaveBeenCalled();
+  });
+
+  it('still makes a simulated label with placeholder addresses (no money, no parcel)', async () => {
+    shopifyRequest.mockResolvedValue(noStoreAddress);
+    primeReturn({ shop: managedShop() });
+    load();
+
+    const label = await LabelService.generateLabel('ret_lbl_1');
+    expect(label.trackingCode).toMatch(/^SHP/);
+  });
+
+  it('records the carrier the aggregator actually booked, not the configured default', async () => {
+    const buy = jest.fn().mockResolvedValue({ trackingCode: 'H01', labelUrl: null, cost: 2.75, carrier: 'Evri', simulated: false });
+    jest.doMock('../../app/services/carriers/ShippoAdapter', liveShippo(buy));
+    primeReturn({ shopifyOrderName: '#1013', shop: managedShop() });
+    load();
+
+    await LabelService.generateLabel('ret_lbl_1');
+
+    expect(prisma.returnLabel.create.mock.calls[0][0].data.carrier).toBe('evri');
+    expect(JSON.parse(qrcode.toDataURL.mock.calls[0][0]).carrier).toBe('evri');
+    expect(billing.recordLabelCharge.mock.calls[0][1].description).toBe('Return label evri #1013');
+  });
+
+  it('normalises a multi-word provider name', async () => {
+    const buy = jest.fn().mockResolvedValue({ trackingCode: 'RM1', labelUrl: null, cost: 3.2, carrier: 'Royal Mail', simulated: false });
+    jest.doMock('../../app/services/carriers/ShippoAdapter', liveShippo(buy));
+    primeReturn({ shop: managedShop() });
+    load();
+
+    await LabelService.generateLabel('ret_lbl_1');
+    expect(prisma.returnLabel.create.mock.calls[0][0].data.carrier).toBe('royalmail');
+  });
+});

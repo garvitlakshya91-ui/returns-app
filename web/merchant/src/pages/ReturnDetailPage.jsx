@@ -20,6 +20,9 @@ import {
 import ReturnStatusBadge from '../components/ReturnStatusBadge';
 import { returnsApi } from '../api';
 
+// Stored carrier codes → display names.
+const CARRIER_NAMES = { royalmail: 'Royal Mail', evri: 'Evri', inpost: 'InPost', dpd: 'DPD', dpduk: 'DPD', ups: 'UPS', dhl: 'DHL', yodel: 'Yodel', parcelforce: 'Parcelforce', shippo: 'Shippo', shipengine: 'ShipEngine' };
+
 const REASON_LABELS = {
   doesnt_fit: "Doesn't fit",
   changed_mind: 'Changed my mind',
@@ -217,7 +220,7 @@ export default function ReturnDetailPage() {
               <BlockStack gap="300">
                 <Text variant="headingMd" as="h2">Shipping Label</Text>
                 <List>
-                  <List.Item>Carrier: {ret.label.carrier}</List.Item>
+                  <List.Item>Carrier: {CARRIER_NAMES[ret.label.carrier] || ret.label.carrier}</List.Item>
                   <List.Item>Tracking: {ret.label.trackingCode || '—'}</List.Item>
                   <List.Item>Status: {ret.label.status}</List.Item>
                 </List>

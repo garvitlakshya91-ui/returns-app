@@ -3,6 +3,9 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import { CheckCircle, AlertCircle, Loader2, Package } from 'lucide-react';
 import { getReturnStatus } from '../api';
 
+// Stored carrier codes → names customers recognise.
+const CARRIER_NAMES = { royalmail: 'Royal Mail', evri: 'Evri', inpost: 'InPost', dpd: 'DPD', dpduk: 'DPD', ups: 'UPS', dhl: 'DHL', yodel: 'Yodel', parcelforce: 'Parcelforce' };
+
 const STATUS_COPY = {
   REQUESTED: 'We\'ve received your return and are reviewing it.',
   APPROVED: 'Your return has been approved. Your shipping label is on its way.',
@@ -122,7 +125,7 @@ export default function ReturnStatusPage() {
         <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-4 text-sm">
           <p className="font-medium text-indigo-900 mb-1">Shipping label</p>
           <p className="text-indigo-700">
-            Carrier: <strong>{ret.label.carrier}</strong>
+            Carrier: <strong>{CARRIER_NAMES[ret.label.carrier] || ret.label.carrier}</strong>
           </p>
           <p className="text-indigo-700">
             Tracking: <strong>{ret.label.trackingCode}</strong>

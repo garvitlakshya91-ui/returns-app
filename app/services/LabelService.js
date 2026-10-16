@@ -14,6 +14,16 @@ const REAL_ORDER_GID = /^gid:\/\/shopify\/Order\/\d+$/;
 // Shown to the merchant when a managed label can't be charged back to them.
 const MANAGED_LABEL_BLOCKED_MESSAGE = 'No label was bought: managed labels need billing set up on your plan. '
   + 'Connect your own carrier account in Settings, or upgrade your plan.';
+const LABEL_NO_RETURNS_ADDRESS_MESSAGE = 'No label was bought: add your returns address in Settings '
+  + '(Warehouse address), or set your store address in Shopify.';
+const LABEL_NO_CUSTOMER_ADDRESS_MESSAGE = 'No label was bought: this order has no shipping address to collect the return from.';
+
+// Aggregators (Shippo) report the carrier they actually booked, e.g. "Evri" or
+// "Royal Mail". Store it the way the rest of the app names carriers.
+function normaliseCarrier(provider) {
+  if (!provider) return null;
+  return String(provider).toLowerCase().replace(/[^a-z0-9]/g, '') || null;
+}
 
 class LabelService {
   /**
@@ -57,7 +67,17 @@ class LabelService {
       }
     }
 
-    const { senderAddress, recipientAddress } = await LabelService.resolveAddresses(shop, returnRecord);
+    const { senderAddress, recipientAddress, missing } = await LabelService.resolveAddresses(shop, returnRecord);
+
+    // A live label is a real parcel booking: never buy one addressed to the
+    // placeholder warehouse or from a customer with no address on the order.
+    if (adapter._isLive === true && (missing.recipient || missing.sender)) {
+      const err = new Error(missing.recipient ? LABEL_NO_RETURNS_ADDRESS_MESSAGE : LABEL_NO_CUSTOMER_ADDRESS_MESSAGE);
+      err.code = 'LABEL_ADDRESS_MISSING';
+      logger.warn({ returnId, missing }, 'Live label not bought: an address is missing');
+      eventBus.emit(LABEL_FAILED, { returnId, error: err.message, code: err.code });
+      throw err;
+    }
 
     const weight = returnRecord.items.reduce((sum, item) => sum + item.quantity * 0.5, 0);
 
@@ -68,6 +88,9 @@ class LabelService {
         weight,
         dimensions: { length: 30, width: 20, height: 10 },
       });
+      // The carrier actually booked (an aggregator picks one per label), so
+      // emails and the dashboard send the customer to the right drop-off.
+      const carrier = normaliseCarrier(labelResult.carrier) || adapter.carrierName;
 
       // Generate QR code. We render as a PNG buffer and upload to R2 so the
       // QR shows up in email clients — Gmail/Outlook strip data: URL images.
@@ -75,7 +98,7 @@ class LabelService {
       // merchant admin embed and in browsers, just not in most email clients).
       const qrData = JSON.stringify({
         tracking: labelResult.trackingCode,
-        carrier: adapter.carrierName,
+        carrier,
         returnId,
         shop: shop.shopifyDomain,
       });
@@ -118,7 +141,7 @@ class LabelService {
       const label = await prisma.returnLabel.create({
         data: {
           returnId,
-          carrier: adapter.carrierName,
+          carrier,
           trackingCode: labelResult.trackingCode,
           labelUrl,
           qrCodeUrl,
@@ -145,7 +168,7 @@ class LabelService {
           const charge = Math.round((Number(labelResult.cost) + BillingService.LABEL_FEE_GBP) * 100) / 100;
           await BillingService.recordLabelCharge(shop, {
             amount: charge,
-            description: `Return label ${labelResult.carrier || adapter.carrierName} ${returnRecord.shopifyOrderName}`,
+            description: `Return label ${carrier} ${returnRecord.shopifyOrderName}`,
           });
         } catch (billingErr) {
           logger.warn({ err: billingErr.message, returnId }, 'Managed-label billing failed after label creation (non-fatal)');
@@ -245,7 +268,13 @@ class LabelService {
           country: 'GB',
         };
 
-    return { senderAddress, recipientAddress };
+    // Which side fell back to a placeholder: a live label must not be bought then.
+    const missing = {
+      sender: !orderShipping?.address1,
+      recipient: !settings.warehouseLine1 && !storeAddress?.address1,
+    };
+
+    return { senderAddress, recipientAddress, missing };
   }
 
   /**

@@ -165,7 +165,9 @@ class RefundService {
       await prisma.returnEvent.create({
         data: {
           returnId,
-          type: 'refund.processed',
+          // onRefundProcessed writes the generic refund.processed entry; this
+          // one carries what Shopify did.
+          type: 'refund.recorded',
           actor: 'system',
           data: {
             method: outcome.method,

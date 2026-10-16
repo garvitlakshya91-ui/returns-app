@@ -19,9 +19,13 @@ const LABEL_NO_CUSTOMER_ADDRESS_MESSAGE = 'No label was bought: this order has n
 
 // Aggregators (Shippo) report the carrier they actually booked, e.g. "Evri" or
 // "Royal Mail". Store it the way the rest of the app names carriers.
+// Aggregators use their own names for some carriers.
+const CARRIER_ALIASES = { hermesuk: 'evri', hermes: 'evri', royalmailuk: 'royalmail' };
+
 function normaliseCarrier(provider) {
   if (!provider) return null;
-  return String(provider).toLowerCase().replace(/[^a-z0-9]/g, '') || null;
+  const code = String(provider).toLowerCase().replace(/[^a-z0-9]/g, '');
+  return CARRIER_ALIASES[code] || code || null;
 }
 
 class LabelService {

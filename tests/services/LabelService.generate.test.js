@@ -833,6 +833,16 @@ describe('LabelService.generateLabel — live labels need real addresses and rec
     expect(billing.recordLabelCharge.mock.calls[0][1].description).toBe('Return label evri #1013');
   });
 
+  it('maps aggregator names for Evri (hermesuk) to our carrier code', async () => {
+    const buy = jest.fn().mockResolvedValue({ trackingCode: 'H01', labelUrl: null, cost: 2.75, carrier: 'hermesuk', simulated: false });
+    jest.doMock('../../app/services/carriers/ShippoAdapter', liveShippo(buy));
+    primeReturn({ shop: managedShop() });
+    load();
+
+    await LabelService.generateLabel('ret_lbl_1');
+    expect(prisma.returnLabel.update.mock.calls[0][0].data.carrier).toBe('evri');
+  });
+
   it('normalises a multi-word provider name', async () => {
     const buy = jest.fn().mockResolvedValue({ trackingCode: 'RM1', labelUrl: null, cost: 3.2, carrier: 'Royal Mail', simulated: false });
     jest.doMock('../../app/services/carriers/ShippoAdapter', liveShippo(buy));

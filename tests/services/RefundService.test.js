@@ -218,7 +218,7 @@ describe('REFUND to the original payment', () => {
       data: { status: 'PROCESSED', refundAmount: 48, processedAt: expect.any(Date) },
     });
     expect(prisma.returnEvent.create.mock.calls[0][0].data).toMatchObject({
-      returnId: 'ret_test_1', type: 'refund.processed', actor: 'system',
+      returnId: 'ret_test_1', type: 'refund.recorded', actor: 'system',
       data: { method: 'original_payment', amount: 48, shopifyRefundId: 'gid://shopify/Refund/9', reconciled: false },
     });
     expect(emit).toHaveBeenCalledWith(REFUND_PROCESSED, { returnId: 'ret_test_1', refundAmount: 48, resolution: 'REFUND' });

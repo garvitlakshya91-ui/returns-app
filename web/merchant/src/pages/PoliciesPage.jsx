@@ -114,7 +114,8 @@ export default function PoliciesPage() {
         fees: {
           changedMind: num(form.feeChangedMind) ?? 0,
           doesntFit: num(form.feeDoesntFit) ?? 0,
-          damaged: num(form.feeDamaged) ?? 0,
+          // Faulty / merchant-fault returns are always free (UK Consumer Rights Act).
+          damaged: 0,
         },
         isDefault: form.isDefault,
         isActive: form.isActive,
@@ -262,7 +263,7 @@ export default function PoliciesPage() {
             <Checkbox label="Exchange for another item" checked={form.allowExchange} onChange={set('allowExchange')} />
 
             <Text variant="headingSm" as="h3">Return fees (£)</Text>
-            <Text tone="subdued" variant="bodySm">Deducted from the refund (or added to an exchange). Faulty/merchant-fault reasons are usually free.</Text>
+            <Text tone="subdued" variant="bodySm">Deducted from the refund (or added to an exchange). Faulty, damaged, wrong or misdescribed items are always free to return under UK law.</Text>
             <InlineStack gap="400">
               <div style={{ flex: 1 }}>
                 <TextField label="Changed mind" type="number" value={form.feeChangedMind} onChange={set('feeChangedMind')} placeholder="0" autoComplete="off" />
@@ -271,7 +272,7 @@ export default function PoliciesPage() {
                 <TextField label="Doesn't fit" type="number" value={form.feeDoesntFit} onChange={set('feeDoesntFit')} placeholder="0" autoComplete="off" />
               </div>
               <div style={{ flex: 1 }}>
-                <TextField label="Damaged" type="number" value={form.feeDamaged} onChange={set('feeDamaged')} placeholder="0" autoComplete="off" />
+                <TextField label="Faulty or damaged" type="number" value="0" disabled helpText="Always free under UK law" autoComplete="off" />
               </div>
             </InlineStack>
 

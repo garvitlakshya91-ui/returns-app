@@ -5,6 +5,9 @@ const eventBus = require('../events/eventBus');
 const { REFUND_PROCESSED } = require('../events/emitters');
 const logger = require('../utils/logger');
 
+// A refund claim older than this is treated as abandoned and can be retaken.
+const CLAIM_STALE_MS = 5 * 60 * 1000;
+
 class RefundService {
   /**
    * Process a refund for a return via Shopify GraphQL API.
@@ -18,6 +21,42 @@ class RefundService {
     if (!returnRecord) throw new Error(`Return ${returnId} not found`);
     if (returnRecord.status === 'PROCESSED') throw new Error('Return already processed');
 
+    // Claim the return before any money moves, so a double-click, a retried
+    // request or a queued job running alongside can't refund it twice. The
+    // claim is processedAt being set on a not-yet-processed row; a claim
+    // older than CLAIM_STALE_MS is treated as abandoned (a crashed attempt).
+    const claimed = await prisma.return.updateMany({
+      where: {
+        id: returnId,
+        status: { not: 'PROCESSED' },
+        OR: [
+          { processedAt: null },
+          { processedAt: { lt: new Date(Date.now() - CLAIM_STALE_MS) } },
+        ],
+      },
+      data: { processedAt: new Date() },
+    });
+    if (claimed.count === 0) throw new Error('Return is already being processed');
+
+    let moneyMoved = false;
+    try {
+      return await RefundService._processClaimed(returnId, returnRecord, () => { moneyMoved = true; });
+    } catch (err) {
+      // Release the claim only if Shopify never acted, so the merchant can
+      // retry. Once money has moved, keep the claim: a retry would refund twice.
+      if (!moneyMoved) {
+        await prisma.return.updateMany({
+          where: { id: returnId, status: { not: 'PROCESSED' } },
+          data: { processedAt: null },
+        }).catch((releaseErr) => logger.error({ returnId, err: releaseErr.message }, 'Could not release refund claim'));
+      } else {
+        logger.error({ returnId, err: err.message }, 'Refund sent to Shopify but saving it failed; claim kept to block a second refund');
+      }
+      throw err;
+    }
+  }
+
+  static async _processClaimed(returnId, returnRecord, markMoneyMoved) {
     const shop = returnRecord.shop;
     const resolution = returnRecord.resolution;
     const totalValue = Number(returnRecord.totalValue);
@@ -64,6 +103,7 @@ class RefundService {
       default:
         throw new Error(`Unknown resolution: ${resolution}`);
     }
+    markMoneyMoved();
 
     await prisma.return.update({
       where: { id: returnId },

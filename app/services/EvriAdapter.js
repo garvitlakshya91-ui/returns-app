@@ -70,45 +70,12 @@ class EvriAdapter extends CarrierAdapter {
     };
   }
 
-  async getDropoffLocations({ postcode, limit = 5 }) {
-    if (this.config?.credentials?.apiKey) {
-      // TODO: Real API call to Evri ParcelShop finder
-    }
-
-    // Mock drop-off locations based on postcode
-    const pc = (postcode || '').toUpperCase().replace(/\s/g, '');
-    return [
-      {
-        id: `evri-${pc}-1`,
-        name: 'Tesco Express',
-        address: `45 High Street, ${postcode}`,
-        lat: 51.5074,
-        lng: -0.1278,
-        distance: '0.2 miles',
-        openingHours: '6am-11pm daily',
-        type: 'ParcelShop',
-      },
-      {
-        id: `evri-${pc}-2`,
-        name: 'WHSmith',
-        address: `12 Market Square, ${postcode}`,
-        lat: 51.5080,
-        lng: -0.1290,
-        distance: '0.4 miles',
-        openingHours: 'Mon-Sat 8am-6pm, Sun 10am-4pm',
-        type: 'ParcelShop',
-      },
-      {
-        id: `evri-${pc}-3`,
-        name: 'Local Convenience Store',
-        address: `78 Station Road, ${postcode}`,
-        lat: 51.5065,
-        lng: -0.1300,
-        distance: '0.6 miles',
-        openingHours: 'Mon-Sun 7am-10pm',
-        type: 'ParcelShop',
-      },
-    ].slice(0, limit);
+  // No live Evri location finder is wired up yet. Return nothing rather
+  // than invented addresses: the portal then points customers to the
+  // carrier's official finder. Plug a real locator API in here.
+  // eslint-disable-next-line no-unused-vars
+  async getDropoffLocations({ postcode, limit = 5 } = {}) {
+    return [];
   }
 }
 

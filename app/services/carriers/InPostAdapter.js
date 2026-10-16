@@ -31,27 +31,12 @@ class InPostAdapter extends CarrierAdapter {
     };
   }
 
-  async getDropoffLocations({ postcode, limit = 5 }) {
-    return [
-      {
-        id: `ip-${postcode}-1`,
-        name: 'InPost Locker — Sainsbury\'s',
-        address: `Car Park, Sainsbury\'s, ${postcode}`,
-        lat: 51.5070, lng: -0.1275,
-        distance: '0.5 miles',
-        openingHours: '24/7',
-        type: 'Locker',
-      },
-      {
-        id: `ip-${postcode}-2`,
-        name: 'InPost Locker — Tesco',
-        address: `Tesco Superstore, ${postcode}`,
-        lat: 51.5060, lng: -0.1260,
-        distance: '0.8 miles',
-        openingHours: '24/7',
-        type: 'Locker',
-      },
-    ].slice(0, limit);
+  // No live InPost location finder is wired up yet. Return nothing rather
+  // than invented addresses: the portal then points customers to the
+  // carrier's official finder. Plug a real locator API in here.
+  // eslint-disable-next-line no-unused-vars
+  async getDropoffLocations({ postcode, limit = 5 } = {}) {
+    return [];
   }
 }
 

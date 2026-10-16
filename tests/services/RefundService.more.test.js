@@ -23,6 +23,7 @@ beforeEach(() => {
   RefundService = require('../../app/services/RefundService');
   eventBus = require('../../app/events/eventBus');
   prisma.return.update.mockResolvedValue({});
+  prisma.return.updateMany.mockResolvedValue({ count: 1 });
 });
 
 function ret(overrides = {}) {

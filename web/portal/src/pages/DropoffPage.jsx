@@ -1,42 +1,35 @@
-import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Search, AlertCircle } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ExternalLink, MapPin, Mail } from 'lucide-react';
 import ProgressStepper from '../components/ProgressStepper';
-import DropoffMap from '../components/DropoffMap';
-import { getDropoffLocations } from '../api';
 
-export default function DropoffPage({ data, update }) {
+// No carrier location finder is wired up yet, so instead of a postcode search
+// that could only show invented addresses, point customers to each carrier's
+// official finder. The label names the carrier, and any of its drop-off points
+// accepts the parcel. The step never blocks: Continue is always available.
+const CARRIER_FINDERS = [
+  {
+    name: 'Royal Mail',
+    detail: 'Post Offices, Parcel Postboxes and Customer Service Points',
+    url: 'https://www.royalmail.com/services-near-you',
+  },
+  {
+    name: 'Evri',
+    detail: 'ParcelShops in local shops and supermarkets',
+    url: 'https://www.evri.com/find-a-parcelshop',
+  },
+  {
+    name: 'InPost',
+    detail: '24/7 parcel lockers',
+    url: 'https://inpost.co.uk/lockers',
+  },
+];
+
+export default function DropoffPage({ update }) {
   const { shopSlug } = useParams();
   const navigate = useNavigate();
-  const [postcode, setPostcode] = useState('');
-  const [locations, setLocations] = useState([]);
-  const [selected, setSelected] = useState(data.dropoff || null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [carrier] = useState('evri');
-
-  async function handleSearch(e) {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
-
-    try {
-      const result = await getDropoffLocations(data.shopId, carrier, postcode);
-      const list = result.locations || [];
-      setLocations(list);
-      if (list.length === 0) {
-        setError('No drop-off points found for this postcode. Try a different postcode.');
-      }
-    } catch (err) {
-      setError('Could not load drop-off locations. Please try again.');
-      setLocations([]);
-    } finally {
-      setLoading(false);
-    }
-  }
 
   function handleNext() {
-    update({ carrier, dropoff: selected });
+    update({ carrier: null, dropoff: null });
     navigate(`/${shopSlug}/confirmation`);
   }
 
@@ -45,46 +38,39 @@ export default function DropoffPage({ data, update }) {
       <ProgressStepper currentStep={5} />
 
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Choose Drop-off Point</h1>
-        <p className="text-gray-500 mt-1">Find your nearest drop-off location</p>
+        <h1 className="text-2xl font-bold text-gray-900">Dropping off your parcel</h1>
+        <p className="text-gray-500 mt-1">
+          Your label shows which carrier to use. Any of that carrier&apos;s drop-off points will accept it.
+        </p>
       </div>
 
-      <div className="inline-flex items-center gap-2 bg-white border border-gray-200 rounded-full px-3 py-1.5 mb-4">
-        <div className="w-4 h-4 bg-indigo-600 rounded-full" />
-        <span className="text-sm font-medium text-gray-700 capitalize">{carrier}</span>
+      <div className="card p-4 mb-6 flex items-start gap-3">
+        <Mail className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5" />
+        <p className="text-sm text-gray-700">
+          Once the store approves your return, we&apos;ll email your label and QR code.
+          Pack the item, then take it to a drop-off point near you.
+        </p>
       </div>
 
-      <form onSubmit={handleSearch} className="flex gap-2 mb-6">
-        <input
-          type="text"
-          value={postcode}
-          onChange={(e) => setPostcode(e.target.value)}
-          placeholder="Enter postcode (e.g. GL1 1DQ)"
-          className="field flex-1 !py-2.5 text-sm"
-        />
-        <button
-          type="submit"
-          disabled={!postcode.trim() || loading}
-          className="btn-primary !w-auto px-4 !py-2.5"
-        >
-          {loading ? (
-            <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-          ) : (
-            <Search className="w-4 h-4" />
-          )}
-          <span className="text-sm">Search</span>
-        </button>
-      </form>
-
-      {error && (
-        <div className="flex items-center gap-2 p-3 rounded-lg bg-red-50 text-red-700 text-sm mb-4">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          {error}
-        </div>
-      )}
-
-      <div className="mb-8">
-        <DropoffMap locations={locations} selected={selected} onSelect={setSelected} />
+      <h2 className="text-sm font-semibold text-gray-700 mb-3">Find a drop-off point</h2>
+      <div className="space-y-3 mb-8">
+        {CARRIER_FINDERS.map((c) => (
+          <a
+            key={c.name}
+            href={c.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="option-card option-card-idle flex items-start gap-3"
+          >
+            <MapPin className="w-5 h-5 shrink-0 mt-0.5 text-gray-400" />
+            <div className="flex-1">
+              <p className="font-medium text-gray-900">{c.name}</p>
+              <p className="text-sm text-gray-500">{c.detail}</p>
+            </div>
+            <ExternalLink className="w-4 h-4 shrink-0 mt-1 text-gray-400" aria-hidden="true" />
+            <span className="sr-only">(opens in a new tab)</span>
+          </a>
+        ))}
       </div>
 
       <div className="flex gap-3">
@@ -99,7 +85,6 @@ export default function DropoffPage({ data, update }) {
         <button
           type="button"
           onClick={handleNext}
-          disabled={!selected}
           className="btn-primary flex-1"
         >
           Continue

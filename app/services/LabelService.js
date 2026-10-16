@@ -11,6 +11,10 @@ const logger = require('../utils/logger');
 // up on the API. Demo/legacy returns skip the order fetch.
 const REAL_ORDER_GID = /^gid:\/\/shopify\/Order\/\d+$/;
 
+// Shown to the merchant when a managed label can't be charged back to them.
+const MANAGED_LABEL_BLOCKED_MESSAGE = 'No label was bought: managed labels need billing set up on your plan. '
+  + 'Connect your own carrier account in Settings, or upgrade your plan.';
+
 class LabelService {
   /**
    * Generate a return label using the appropriate carrier adapter.
@@ -35,6 +39,23 @@ class LabelService {
     const activeConfig = (shop.carrierConfigs || []).find((c) => c.isActive);
     const isManagedPlatform = ['shippo', 'shipengine'].includes(activeConfig?.carrier)
       && !activeConfig?.credentials?.encrypted;
+
+    // A live managed label is paid for from ReturnFlow's account, so it is only
+    // bought once we know the merchant can be charged for it. Simulated labels
+    // cost nothing and skip the check.
+    let managedBilling = null;
+    if (isManagedPlatform && adapter._isLive === true) {
+      const BillingService = require('./BillingService');
+      managedBilling = await BillingService.managedLabelBilling(shop);
+      if (!managedBilling.allowed) {
+        const err = new Error(MANAGED_LABEL_BLOCKED_MESSAGE);
+        err.code = 'MANAGED_LABEL_BILLING';
+        err.reason = managedBilling.reason;
+        logger.warn({ returnId, reason: managedBilling.reason }, 'Managed label not bought: merchant cannot be charged');
+        eventBus.emit(LABEL_FAILED, { returnId, error: err.message, code: err.code });
+        throw err;
+      }
+    }
 
     const { senderAddress, recipientAddress } = await LabelService.resolveAddresses(shop, returnRecord);
 
@@ -117,7 +138,8 @@ class LabelService {
       // own try/catch: the label already exists and the return is LABEL_SENT,
       // so a billing hiccup must never turn a successful label into
       // LABEL_FAILED (which would also suppress the customer's label email).
-      if (isManagedPlatform && !labelResult.simulated && Number(labelResult.cost) > 0) {
+      if (isManagedPlatform && !labelResult.simulated && Number(labelResult.cost) > 0
+        && !managedBilling?.devStore) {
         try {
           const BillingService = require('./BillingService');
           const charge = Math.round((Number(labelResult.cost) + BillingService.LABEL_FEE_GBP) * 100) / 100;

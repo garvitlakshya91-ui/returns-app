@@ -9,7 +9,9 @@
 // than one (the highest) shipping fee.
 //
 // Faulty / merchant-fault reasons (damaged, wrong item, not as described,
-// quality) map to the `damaged` bucket, which merchants normally leave at £0.
+// quality) map to the `damaged` bucket, which is always £0: under the UK
+// Consumer Rights Act a customer returning faulty or misdescribed goods can't
+// be charged for the return, so no policy setting can put a fee on them.
 
 const REASON_FEE_KEY = {
   changed_mind: 'changedMind',
@@ -20,6 +22,9 @@ const REASON_FEE_KEY = {
   quality: 'damaged',
   other: 'changedMind',
 };
+
+// Fee buckets that are never charged, whatever the policy says.
+const FEE_FREE_KEYS = new Set(['damaged']);
 
 /**
  * @param {object|null} policyFees  The policy's `fees` JSON (or null).
@@ -32,6 +37,7 @@ function computeReturnFee(policyFees, items) {
   let max = 0;
   for (const item of items) {
     const key = REASON_FEE_KEY[item.reason] || 'changedMind';
+    if (FEE_FREE_KEYS.has(key)) continue;
     const fee = Number(policyFees[key] || 0);
     if (Number.isFinite(fee) && fee > max) max = fee;
   }
@@ -39,4 +45,4 @@ function computeReturnFee(policyFees, items) {
   return Math.round(max * 100) / 100;
 }
 
-module.exports = { computeReturnFee, REASON_FEE_KEY };
+module.exports = { computeReturnFee, REASON_FEE_KEY, FEE_FREE_KEYS };

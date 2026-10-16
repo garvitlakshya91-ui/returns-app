@@ -48,6 +48,20 @@ eventBus.on(RETURN_APPROVED, async ({ returnId, shopId, approvedBy }) => {
       }
     } catch (labelErr) {
       console.error(`[Event] Label generation failed for ${returnId}:`, labelErr.message);
+      // Put the failure on the return's timeline so the merchant sees why no
+      // label went out, instead of a return that silently stays Approved.
+      try {
+        await prisma.returnEvent.create({
+          data: {
+            returnId,
+            type: 'label.failed',
+            actor: 'system',
+            data: { error: labelErr.message, code: labelErr.code || null },
+          },
+        });
+      } catch (eventErr) {
+        console.error(`[Event] Could not record label failure for ${returnId}:`, eventErr.message);
+      }
     }
 
     console.log(`[Event] Return approved: ${returnId}`);

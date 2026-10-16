@@ -66,16 +66,12 @@ class ShipEngineAdapter extends CarrierAdapter {
     };
   }
 
-  async getDropoffLocations({ postcode, limit = 5 }) {
-    return Array.from({ length: Math.min(limit, 1) }, (_, i) => ({
-      id: `se-${postcode}-${i + 1}`,
-      name: 'Drop-off point',
-      address: `${i + 1} High Street, ${postcode}`,
-      lat: 51.5074, lng: -0.1278,
-      distance: '0.3 miles',
-      openingHours: 'Varies by location',
-      type: 'Drop-off',
-    }));
+  // No live ShipEngine location finder is wired up yet. Return nothing rather
+  // than invented addresses: the portal then points customers to the
+  // carrier's official finder. Plug a real locator API in here.
+  // eslint-disable-next-line no-unused-vars
+  async getDropoffLocations({ postcode, limit = 5 } = {}) {
+    return [];
   }
 
   // ─── Simulation ───

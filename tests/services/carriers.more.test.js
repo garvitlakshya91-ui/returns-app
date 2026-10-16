@@ -209,13 +209,10 @@ describe('ShippoAdapter — tracking + drop-offs', () => {
     expect(s.trackingUrl).toBeNull();
   });
 
-  it('returns at most one generic drop-off point regardless of limit, and none for limit 0', async () => {
+  it('never invents drop-off addresses: returns none until a real locator is wired up', async () => {
     const a = new ShippoAdapter({});
-    expect(await a.getDropoffLocations({ postcode: 'GL1 1AA', limit: 5 })).toHaveLength(1);
-    expect(await a.getDropoffLocations({ postcode: 'GL1 1AA' })).toHaveLength(1);
-    expect(await a.getDropoffLocations({ postcode: 'GL1 1AA', limit: 0 })).toHaveLength(0);
-    const [loc] = await a.getDropoffLocations({ postcode: 'GL1 1AA', limit: 1 });
-    expect(loc).toMatchObject({ id: 'shp-GL1 1AA-1', address: '1 High Street, GL1 1AA', type: 'Drop-off' });
+    expect(await a.getDropoffLocations({ postcode: 'GL1 1AA', limit: 5 })).toEqual([]);
+    expect(await a.getDropoffLocations({})).toEqual([]);
   });
 });
 
@@ -230,12 +227,9 @@ describe('ShipEngineAdapter — tracking + drop-offs', () => {
     expect(s.estimatedDelivery.getTime()).toBeGreaterThanOrEqual(before + 2 * DAY - 1000);
   });
 
-  it('caps drop-offs at one and respects a zero limit', async () => {
+  it('never invents drop-off addresses: returns none until a real locator is wired up', async () => {
     const a = new ShipEngineAdapter({});
-    expect(await a.getDropoffLocations({ postcode: 'M1', limit: 3 })).toEqual([
-      expect.objectContaining({ id: 'se-M1-1', address: '1 High Street, M1', type: 'Drop-off' }),
-    ]);
-    expect(await a.getDropoffLocations({ postcode: 'M1', limit: 0 })).toEqual([]);
+    expect(await a.getDropoffLocations({ postcode: 'M1', limit: 3 })).toEqual([]);
   });
 });
 
@@ -360,13 +354,9 @@ describe('RoyalMailAdapter — live response mapping + defaults', () => {
     await expect(live().generateLabel(FULL_ARGS)).rejects.toThrow('Royal Mail order create failed (503)');
   });
 
-  it('never returns more drop-offs than it knows about, and none for limit 0', async () => {
+  it('never invents drop-off addresses: returns none until a real locator is wired up', async () => {
     const a = new RoyalMailAdapter({});
-    const many = await a.getDropoffLocations({ postcode: 'GL1', limit: 10 });
-    expect(many).toHaveLength(2);
-    expect(many.map((l) => l.type)).toEqual(['Post Office', 'Delivery Office']);
-    expect(many[1].distance).toBe('0.5 miles');
-    expect(await a.getDropoffLocations({ postcode: 'GL1', limit: 0 })).toEqual([]);
+    expect(await a.getDropoffLocations({ postcode: 'GL1', limit: 10 })).toEqual([]);
   });
 });
 
@@ -409,23 +399,10 @@ describe('EvriAdapter', () => {
     expect(s.estimatedDelivery.getTime()).toBeGreaterThanOrEqual(before + 2 * DAY - 1000);
   });
 
-  it('returns up to three ParcelShops, honouring limit, with ids normalised from the postcode', async () => {
+  it('never invents drop-off addresses: returns none until a real locator is wired up', async () => {
     const a = new EvriAdapter({});
-    const all = await a.getDropoffLocations({ postcode: 'gl1 1dq' });
-    expect(all).toHaveLength(3);
-    expect(all.map((l) => l.id)).toEqual(['evri-GL11DQ-1', 'evri-GL11DQ-2', 'evri-GL11DQ-3']);
-    expect(all[0].address).toBe('45 High Street, gl1 1dq'); // raw postcode kept in the address
-    expect(all.every((l) => l.type === 'ParcelShop')).toBe(true);
-
-    const two = await a.getDropoffLocations({ postcode: 'GL1 1DQ', limit: 2 });
-    expect(two.map((l) => l.name)).toEqual(['Tesco Express', 'WHSmith']);
-    expect(await a.getDropoffLocations({ postcode: 'GL1', limit: 0 })).toEqual([]);
-  });
-
-  it('does not crash when postcode is missing', async () => {
-    const locs = await new EvriAdapter({}).getDropoffLocations({});
-    expect(locs).toHaveLength(3);
-    expect(locs[0].id).toBe('evri--1');
+    expect(await a.getDropoffLocations({ postcode: 'gl1 1dq' })).toEqual([]);
+    expect(await a.getDropoffLocations({})).toEqual([]);
   });
 });
 
@@ -451,15 +428,7 @@ describe('InPostAdapter', () => {
     expect(s.estimatedDelivery).toBeInstanceOf(Date);
   });
 
-  it('lists 24/7 lockers near the postcode, honouring limit', async () => {
-    const a = new InPostAdapter({});
-    const all = await a.getDropoffLocations({ postcode: 'SW1A 1AA' });
-    expect(all).toHaveLength(2);
-    expect(all.every((l) => l.type === 'Locker' && l.openingHours === '24/7')).toBe(true);
-    expect(all[0].id).toBe('ip-SW1A 1AA-1');
-    expect(all[1].address).toContain('SW1A 1AA');
-
-    expect(await a.getDropoffLocations({ postcode: 'SW1A 1AA', limit: 1 })).toHaveLength(1);
-    expect(await a.getDropoffLocations({ postcode: 'SW1A 1AA', limit: 0 })).toEqual([]);
+  it('never invents drop-off addresses: returns none until a real locator is wired up', async () => {
+    expect(await new InPostAdapter({}).getDropoffLocations({ postcode: 'SW1A 1AA' })).toEqual([]);
   });
 });

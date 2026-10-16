@@ -299,6 +299,77 @@ describe('BillingService.recordLabelCharge', () => {
     expect(id).toBeNull();
     expect(shopifyClient.request).toHaveBeenCalledTimes(1); // no mutation attempted
   });
+
+  it('charges in GBP even when the store trades in another currency', async () => {
+    const BillingService = require('../../app/services/BillingService');
+    shopifyClient.request
+      .mockResolvedValueOnce({
+        data: { currentAppInstallation: { activeSubscriptions: [{
+          id: 'sub_1', status: 'ACTIVE',
+          lineItems: [{ id: 'li_usage', plan: { pricingDetails: { __typename: 'AppUsagePricing' } } }],
+        }] } },
+      })
+      .mockResolvedValueOnce({ data: { appUsageRecordCreate: { appUsageRecord: { id: 'usage_2' }, userErrors: [] } } });
+
+    await BillingService.recordLabelCharge(fakeShop({ shopifyToken: encrypt('shpat_x'), currency: 'USD' }), { amount: 3.21, description: 'x' });
+    expect(shopifyClient.request.mock.calls[1][1].variables.price).toEqual({ amount: 3.21, currencyCode: 'GBP' });
+  });
+});
+
+describe('BillingService.managedLabelBilling', () => {
+  const shop = () => fakeShop({ shopifyToken: encrypt('shpat_x') });
+  const devStore = (dev) => ({ data: { shop: { plan: { partnerDevelopment: dev } } } });
+  const subscription = (pricingDetails) => ({
+    data: { currentAppInstallation: { activeSubscriptions: [{
+      status: 'ACTIVE',
+      lineItems: [
+        { id: 'li_rec', plan: { pricingDetails: { __typename: 'AppRecurringPricing' } } },
+        ...(pricingDetails ? [{ id: 'li_usage', plan: { pricingDetails } }] : []),
+      ],
+    }] } },
+  });
+  const usage = (cap, used, currencyCode = 'GBP') => ({
+    __typename: 'AppUsagePricing',
+    cappedAmount: { amount: String(cap), currencyCode },
+    balanceUsed: { amount: String(used), currencyCode },
+  });
+
+  it('allows a development store without charging it', async () => {
+    const BillingService = require('../../app/services/BillingService');
+    shopifyClient.request.mockResolvedValueOnce(devStore(true));
+    expect(await BillingService.managedLabelBilling(shop())).toEqual({ allowed: true, devStore: true, reason: null, lineItemId: null });
+    expect(shopifyClient.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a real store whose plan has no usage billing', async () => {
+    const BillingService = require('../../app/services/BillingService');
+    shopifyClient.request.mockResolvedValueOnce(devStore(false)).mockResolvedValueOnce(subscription(null));
+    expect(await BillingService.managedLabelBilling(shop())).toMatchObject({ allowed: false, reason: 'no_usage_billing' });
+  });
+
+  it('refuses when the usage line item is not in GBP', async () => {
+    const BillingService = require('../../app/services/BillingService');
+    shopifyClient.request.mockResolvedValueOnce(devStore(false)).mockResolvedValueOnce(subscription(usage(200, 0, 'USD')));
+    expect(await BillingService.managedLabelBilling(shop())).toMatchObject({ allowed: false, reason: 'currency_mismatch' });
+  });
+
+  it('refuses when the usage cap has less headroom than one label', async () => {
+    const BillingService = require('../../app/services/BillingService');
+    shopifyClient.request.mockResolvedValueOnce(devStore(false)).mockResolvedValueOnce(subscription(usage(200, 197)));
+    expect(await BillingService.managedLabelBilling(shop())).toMatchObject({ allowed: false, reason: 'usage_cap_reached' });
+  });
+
+  it('allows a real store with GBP usage billing and room under the cap', async () => {
+    const BillingService = require('../../app/services/BillingService');
+    shopifyClient.request.mockResolvedValueOnce(devStore(false)).mockResolvedValueOnce(subscription(usage(200, 20)));
+    expect(await BillingService.managedLabelBilling(shop())).toEqual({ allowed: true, devStore: false, reason: null, lineItemId: 'li_usage' });
+  });
+
+  it('refuses when the billing check itself fails', async () => {
+    const BillingService = require('../../app/services/BillingService');
+    shopifyClient.request.mockResolvedValueOnce(devStore(false)).mockRejectedValueOnce(new Error('Shopify down'));
+    expect(await BillingService.managedLabelBilling(shop())).toMatchObject({ allowed: false, reason: 'billing_check_failed' });
+  });
 });
 
 describe("POST /api/admin/billing/subscribe — App Pricing refusal wordings", () => {

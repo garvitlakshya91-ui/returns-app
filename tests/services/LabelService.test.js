@@ -202,16 +202,8 @@ describe('Mock adapter outputs', () => {
     }
   });
 
-  it('Evri dropoff lookup returns three ParcelShops keyed to the postcode', async () => {
+  it('Evri dropoff lookup returns no invented ParcelShops', async () => {
     const adapter = LabelService.getCarrierAdapter(shopWith('evri'), 'evri');
-    const locs = await adapter.getDropoffLocations({ postcode: 'GL1 1DQ' });
-    expect(locs).toHaveLength(3);
-    expect(locs.every((l) => l.id.includes('GL11DQ'))).toBe(true);
-  });
-
-  it('Evri dropoff lookup honors the limit', async () => {
-    const adapter = LabelService.getCarrierAdapter(shopWith('evri'), 'evri');
-    const locs = await adapter.getDropoffLocations({ postcode: 'EC1A 1BB', limit: 2 });
-    expect(locs).toHaveLength(2);
+    expect(await adapter.getDropoffLocations({ postcode: 'GL1 1DQ' })).toEqual([]);
   });
 });

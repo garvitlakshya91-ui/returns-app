@@ -12,10 +12,8 @@ describe('RoyalMailAdapter — basics', () => {
     expect(new RoyalMailAdapter({}).carrierName).toBe('royalmail');
   });
 
-  it('returns drop-off locations capped at the limit', async () => {
-    const locs = await new RoyalMailAdapter({}).getDropoffLocations({ postcode: 'GL1 1DQ', limit: 1 });
-    expect(locs).toHaveLength(1);
-    expect(locs[0]).toMatchObject({ type: 'Post Office' });
+  it('never invents drop-off addresses: returns none until a real locator is wired up', async () => {
+    expect(await new RoyalMailAdapter({}).getDropoffLocations({ postcode: 'GL1 1DQ', limit: 1 })).toEqual([]);
   });
 
   it('returns a tracking status with a public tracking URL', async () => {

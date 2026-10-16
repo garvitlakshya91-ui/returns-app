@@ -61,23 +61,12 @@ class RoyalMailAdapter extends CarrierAdapter {
     };
   }
 
-  async getDropoffLocations({ postcode, limit = 5 }) {
-    // Royal Mail has a branch-finder / Local Collect API; until that's wired,
-    // return representative Post Office + Customer Service Point drop-offs.
-    const kinds = [
-      { name: 'Post Office', type: 'Post Office', openingHours: 'Mon-Fri 9am-5:30pm, Sat 9am-12:30pm' },
-      { name: 'Royal Mail Customer Service Point', type: 'Delivery Office', openingHours: 'Mon-Fri 8am-6pm, Sat 8am-12pm' },
-    ];
-    return Array.from({ length: Math.min(limit, kinds.length) }, (_, i) => ({
-      id: `rm-${postcode}-${i + 1}`,
-      name: kinds[i].name,
-      address: `${i + 1} High Street, ${postcode}`,
-      lat: 51.5074,
-      lng: -0.1278,
-      distance: `${(0.2 + i * 0.3).toFixed(1)} miles`,
-      openingHours: kinds[i].openingHours,
-      type: kinds[i].type,
-    }));
+  // No live Royal Mail location finder is wired up yet. Return nothing rather
+  // than invented addresses: the portal then points customers to the
+  // carrier's official finder. Plug a real locator API in here.
+  // eslint-disable-next-line no-unused-vars
+  async getDropoffLocations({ postcode, limit = 5 } = {}) {
+    return [];
   }
 
   // ─── Simulation ───────────────────────────────────────────────────────────

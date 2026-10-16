@@ -77,6 +77,7 @@ function installMocks() {
   billing = {
     LABEL_FEE_GBP: 0.5,
     recordLabelCharge: jest.fn().mockResolvedValue('gid://shopify/AppUsageRecord/1'),
+    managedLabelBilling: jest.fn().mockResolvedValue({ allowed: true, devStore: false, reason: null, lineItemId: 'li_1' }),
   };
   jest.doMock('../../app/services/BillingService', () => billing);
 }
@@ -466,6 +467,8 @@ describe('LabelService.generateLabel — managed-platform billing', () => {
   const liveShippo = () => class {
     get carrierName() { return 'royalmail'; }
 
+    get _isLive() { return true; }
+
     async generateLabel() {
       return { trackingCode: 'SHP-LIVE', labelUrl: null, cost: 4.2, carrier: 'royalmail', simulated: false };
     }
@@ -491,6 +494,8 @@ describe('LabelService.generateLabel — managed-platform billing', () => {
   it('also bills for a platform ShipEngine label', async () => {
     jest.doMock('../../app/services/carriers/ShipEngineAdapter', () => class {
       get carrierName() { return 'royalmail'; }
+
+      get _isLive() { return true; }
 
       async generateLabel() {
         return { trackingCode: 'SE-LIVE', labelUrl: null, cost: 3.1, simulated: false };
@@ -575,5 +580,80 @@ describe('LabelService.generateLabel — managed-platform billing', () => {
       expect.objectContaining({ err: 'billing exploded', returnId: 'ret_lbl_1' }),
       expect.stringMatching(/billing failed/i),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('LabelService.generateLabel — managed labels are only bought when they can be charged back', () => {
+  const liveShippo = (generateLabel) => () => class {
+    get carrierName() { return 'royalmail'; }
+
+    get _isLive() { return true; }
+
+    async generateLabel(...args) { return generateLabel(...args); }
+  };
+  const managedShop = () => shopWith([{ carrier: 'shippo', isActive: true, credentials: {}, settings: {} }]);
+
+  it('buys nothing, emits LABEL_FAILED and throws when the merchant cannot be charged', async () => {
+    const buy = jest.fn();
+    jest.doMock('../../app/services/carriers/ShippoAdapter', liveShippo(buy));
+    billing.managedLabelBilling.mockResolvedValue({ allowed: false, devStore: false, reason: 'no_usage_billing', lineItemId: null });
+    primeReturn({ shop: managedShop() });
+    load();
+    const failed = jest.fn();
+    eventBus.on(LABEL_FAILED, failed);
+
+    await expect(LabelService.generateLabel('ret_lbl_1')).rejects.toMatchObject({
+      code: 'MANAGED_LABEL_BILLING',
+      reason: 'no_usage_billing',
+    });
+
+    expect(buy).not.toHaveBeenCalled();
+    expect(prisma.returnLabel.create).not.toHaveBeenCalled();
+    expect(prisma.return.update).not.toHaveBeenCalled();
+    expect(billing.recordLabelCharge).not.toHaveBeenCalled();
+    expect(failed).toHaveBeenCalledWith(expect.objectContaining({ returnId: 'ret_lbl_1', code: 'MANAGED_LABEL_BILLING' }));
+  });
+
+  it('on a development store buys the label but never charges for it', async () => {
+    const buy = jest.fn().mockResolvedValue({ trackingCode: 'SHP-DEV', labelUrl: null, cost: 2.71, simulated: false });
+    jest.doMock('../../app/services/carriers/ShippoAdapter', liveShippo(buy));
+    billing.managedLabelBilling.mockResolvedValue({ allowed: true, devStore: true, reason: null, lineItemId: null });
+    primeReturn({ shop: managedShop() });
+    load();
+
+    const label = await LabelService.generateLabel('ret_lbl_1');
+
+    expect(buy).toHaveBeenCalledTimes(1);
+    expect(label.trackingCode).toBe('SHP-DEV');
+    expect(billing.recordLabelCharge).not.toHaveBeenCalled();
+  });
+
+  it('does not run the billing check for a simulated label (no platform key)', async () => {
+    primeReturn({ shop: managedShop() });
+    load();
+
+    await LabelService.generateLabel('ret_lbl_1');
+
+    expect(billing.managedLabelBilling).not.toHaveBeenCalled();
+  });
+
+  it('does not run the billing check when the merchant brought their own carrier credentials', async () => {
+    const buy = jest.fn().mockResolvedValue({ trackingCode: 'SHP-BYO', labelUrl: null, cost: 3, simulated: false });
+    jest.doMock('../../app/services/carriers/ShippoAdapter', liveShippo(buy));
+    primeReturn({
+      shop: shopWith([{
+        carrier: 'shippo',
+        isActive: true,
+        credentials: { encrypted: encrypt(JSON.stringify({ apiKey: 'shippo_live_merchant' })) },
+        settings: {},
+      }]),
+    });
+    load();
+
+    await LabelService.generateLabel('ret_lbl_1');
+
+    expect(billing.managedLabelBilling).not.toHaveBeenCalled();
+    expect(buy).toHaveBeenCalledTimes(1);
   });
 });

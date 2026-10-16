@@ -19,6 +19,58 @@ beforeEach(() => {
 
   RefundService = require('../../app/services/RefundService');
   eventBus = require('../../app/events/eventBus');
+  // The refund claim succeeds unless a test says otherwise.
+  prisma.return.updateMany.mockResolvedValue({ count: 1 });
+});
+
+describe('RefundService.processRefund — double-refund guard', () => {
+  it('refuses when another attempt already holds the claim, before touching Shopify', async () => {
+    prisma.return.findUnique.mockResolvedValue(ret({ status: 'RECEIVED', resolution: 'REFUND' }));
+    prisma.return.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    await expect(RefundService.processRefund('ret_1')).rejects.toThrow('already being processed');
+    expect(shopifyClient.request).not.toHaveBeenCalled();
+  });
+
+  it('claims only a not-yet-processed row with no live claim', async () => {
+    prisma.return.findUnique.mockResolvedValue(ret({ status: 'RECEIVED', resolution: 'STORE_CREDIT' }));
+    shopifyClient.request.mockResolvedValue({
+      data: { giftCardCreate: { giftCard: { id: 'gc_1', lastCharacters: 'ABCD' }, userErrors: [] } },
+    });
+    prisma.return.update.mockResolvedValue({});
+
+    await RefundService.processRefund('ret_1');
+
+    const claim = prisma.return.updateMany.mock.calls[0][0];
+    expect(claim.where.id).toBe('ret_1');
+    expect(claim.where.status).toEqual({ not: 'PROCESSED' });
+    expect(claim.where.OR[0]).toEqual({ processedAt: null });
+    expect(claim.where.OR[1].processedAt.lt).toBeInstanceOf(Date);
+    expect(claim.data.processedAt).toBeInstanceOf(Date);
+  });
+
+  it('releases the claim when Shopify refuses, so the merchant can retry', async () => {
+    prisma.return.findUnique.mockResolvedValue(ret({ status: 'RECEIVED', resolution: 'STORE_CREDIT' }));
+    shopifyClient.request.mockResolvedValue({
+      data: { giftCardCreate: { giftCard: null, userErrors: [{ message: 'nope' }] } },
+    });
+
+    await expect(RefundService.processRefund('ret_1')).rejects.toThrow('nope');
+    expect(prisma.return.updateMany).toHaveBeenCalledTimes(2);
+    expect(prisma.return.updateMany.mock.calls[1][0].data).toEqual({ processedAt: null });
+  });
+
+  it('keeps the claim when money moved but saving the result failed', async () => {
+    prisma.return.findUnique.mockResolvedValue(ret({ status: 'RECEIVED', resolution: 'STORE_CREDIT' }));
+    shopifyClient.request.mockResolvedValue({
+      data: { giftCardCreate: { giftCard: { id: 'gc_1', lastCharacters: 'ABCD' }, userErrors: [] } },
+    });
+    prisma.return.update.mockRejectedValue(new Error('db down'));
+
+    await expect(RefundService.processRefund('ret_1')).rejects.toThrow('db down');
+    // Only the claim itself — never released, so a retry can't issue a second gift card.
+    expect(prisma.return.updateMany).toHaveBeenCalledTimes(1);
+  });
 });
 
 function ret(overrides = {}) {

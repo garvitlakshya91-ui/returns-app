@@ -24,6 +24,15 @@ describe('computeReturnFee', () => {
     expect(computeReturnFee(FEES, [{ reason: 'not_as_described' }])).toBe(0);
   });
 
+  it('never charges for faulty / merchant-fault reasons, even if a policy sets a damaged fee', () => {
+    const greedy = { changedMind: 2.5, doesntFit: 1, damaged: 5 };
+    for (const reason of ['damaged', 'wrong_item', 'not_as_described', 'quality']) {
+      expect(computeReturnFee(greedy, [{ reason }])).toBe(0);
+    }
+    // A mixed return still pays the changed-mind fee, never the damaged one.
+    expect(computeReturnFee(greedy, [{ reason: 'damaged' }, { reason: 'changed_mind' }])).toBe(2.5);
+  });
+
   it('takes the MAX fee across a mixed-reason return (one fee per parcel)', () => {
     expect(computeReturnFee(FEES, [
       { reason: 'damaged' },      // 0

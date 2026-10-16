@@ -273,6 +273,9 @@ export default function ReturnDetailPage() {
                         </Text>
                         <Text variant="bodySm">{event.type.replace('.', ' — ')}</Text>
                       </InlineStack>
+                      {event.data?.error && (
+                        <Text variant="bodySm" tone="critical">{event.data.error}</Text>
+                      )}
                     </Box>
                   ))}
                 </BlockStack>

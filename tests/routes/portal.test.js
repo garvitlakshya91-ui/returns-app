@@ -6,6 +6,7 @@ const { encrypt } = require('../../app/utils/encryption');
 let app;
 let prisma;
 let shopifyClient;
+let validation;
 
 beforeEach(() => {
   jest.resetModules();
@@ -26,6 +27,28 @@ beforeEach(() => {
   jest.doMock('../../app/services/PolicyEngine', () => ({
     evaluateEligibility: jest.fn().mockResolvedValue({ eligible: true, policy: {}, resolutions: {}, fees: null }),
   }));
+
+
+  // ReturnValidation (ownership, eligibility, prices) has its own unit tests;
+  // here it is stubbed so the route layer is what is under test.
+  validation = {
+    EXCHANGES_ENABLED: false,
+    ValidationError: class ValidationError extends Error {
+      constructor(status, message) { super(message); this.status = status; }
+    },
+    loadOrder: jest.fn().mockResolvedValue({
+      order: { id: 'gid://shopify/Order/1001', name: '#1001', email: 'jane@x.com', currency: 'GBP', fulfillmentStatus: 'FULFILLED' },
+      items: [],
+    }),
+    validateCreate: jest.fn().mockImplementation(async (shop, { orderId, customerEmail, items, resolution }) => ({
+      order: { id: orderId, name: '#1001', email: customerEmail, currency: 'GBP' },
+      items: items.map((i) => ({
+        lineItemId: i.lineItemId, productId: 'p1', variantId: 'v1', productTitle: 'Wool jumper', variantTitle: 'M',
+        sku: 'WJ', quantity: i.quantity, unitPrice: 47.5, reason: i.reason, reasonDetail: i.reasonDetail || null, photoUrls: [],
+      })),
+    })),
+  };
+  jest.doMock('../../app/services/ReturnValidation', () => validation);
 
   // Stub ReturnService.createReturn so tests don't have to mock the
   // shop.update / event emit chain that's already covered in unit tests.
@@ -110,13 +133,18 @@ describe('POST /api/portal/lookup', () => {
       },
     });
 
+    validation.loadOrder.mockResolvedValue({
+      order: { id: 'o1', name: '#1001', email: 'jane@x.com', currency: 'GBP', fulfillmentStatus: 'FULFILLED' },
+      items: [{ id: 'li1', lineItemId: 'li1', title: 'Tee', price: 20, quantity: 1, sku: 'TEE-M-NAV', eligible: true, resolutions: ['REFUND'] }],
+    });
     const res = await request(app)
       .post('/api/portal/lookup')
       .send({ email: 'jane@x.com', orderNumber: '#1001', shopSlug: 'shop1' });
 
     expect(res.status).toBe(200);
+    expect(validation.loadOrder).toHaveBeenCalledWith(expect.objectContaining({ id: 'shop_test_1' }), 'o1');
     expect(res.body.eligibleItems).toHaveLength(1);
-    expect(res.body.eligibleItems[0]).toMatchObject({ title: 'Tee', price: 20, sku: 'TEE-M-NAV' });
+    expect(res.body.eligibleItems[0]).toMatchObject({ title: 'Tee', price: 20, sku: 'TEE-M-NAV', resolutions: ['REFUND'] });
   });
 });
 
@@ -160,20 +188,6 @@ describe('POST /api/portal/returns', () => {
     expect(res.status).toBe(400);
   });
 
-  it('400 when orderId is missing (the old silent "pending" fallback made refunds 500)', async () => {
-    prisma.shop.findUnique.mockResolvedValue(fakeShop({ plan: 'GROWTH' }));
-    const res = await request(app)
-      .post('/api/portal/returns')
-      .send({
-        shopId: 'shop_test_1',
-        items: [{ lineItemId: 'li1', productTitle: 'Tee', quantity: 1, unitPrice: 20, reason: 'doesnt_fit' }],
-        resolution: 'REFUND',
-        customerEmail: 'jane@x.com',
-      });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/orderId/);
-  });
-
   it('201 creates return on the happy path', async () => {
     prisma.shop.findUnique.mockResolvedValue(fakeShop({ plan: 'GROWTH' }));
     const res = await request(app)
@@ -194,8 +208,15 @@ describe('POST /api/portal/returns', () => {
 describe('GET /api/portal/returns/:id', () => {
   it('404 when return not found', async () => {
     prisma.return.findUnique.mockResolvedValue(null);
-    const res = await request(app).get('/api/portal/returns/missing');
+    const res = await request(app).get('/api/portal/returns/missing?email=a@x.com');
     expect(res.status).toBe(404);
+  });
+
+  it('400 when no email is supplied — a return id alone grants nothing', async () => {
+    prisma.return.findUnique.mockResolvedValue({ id: 'r', customerEmail: 'a@x.com', items: [], events: [] });
+    const res = await request(app).get('/api/portal/returns/r');
+    expect(res.status).toBe(400);
+    expect(prisma.return.findUnique).not.toHaveBeenCalled();
   });
 
   it('404 when email query does not match the return', async () => {

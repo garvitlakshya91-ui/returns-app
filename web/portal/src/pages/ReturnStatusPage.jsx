@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { CheckCircle, AlertCircle, Loader2, Package } from 'lucide-react';
 import { getReturnStatus } from '../api';
+import { formatMoney } from '../money';
 
 // Stored carrier codes → names customers recognise.
 const CARRIER_NAMES = { royalmail: 'Royal Mail', evri: 'Evri', inpost: 'InPost', dpd: 'DPD', dpduk: 'DPD', ups: 'UPS', dhl: 'DHL', yodel: 'Yodel', parcelforce: 'Parcelforce' };
@@ -22,16 +23,23 @@ export default function ReturnStatusPage() {
   const { id } = useParams();
   const [searchParams] = useSearchParams();
   const paid = searchParams.get('paid');
+  // The return is only shown to the person who made it: the email on the
+  // return must be supplied (from the email link, or typed in below).
+  const [email, setEmail] = useState(searchParams.get('email') || '');
+  const [draftEmail, setDraftEmail] = useState('');
 
   const [ret, setReturn] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(email));
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (!email) return undefined;
     let cancelled = false;
+    setLoading(true);
+    setError('');
     async function load() {
       try {
-        const data = await getReturnStatus(id);
+        const data = await getReturnStatus(id, email);
         if (!cancelled) setReturn(data);
       } catch (err) {
         if (!cancelled) setError(err.message || 'Could not load return');
@@ -41,7 +49,30 @@ export default function ReturnStatusPage() {
     }
     load();
     return () => { cancelled = true; };
-  }, [id]);
+  }, [id, email]);
+
+  if (!email) {
+    return (
+      <div className="py-2 max-w-sm mx-auto">
+        <div className="text-center mb-6">
+          <Package className="w-10 h-10 text-indigo-600 mx-auto mb-2" />
+          <h1 className="text-2xl font-bold text-gray-900">Check your return</h1>
+          <p className="text-gray-500 mt-1">Enter the email address you used for this order.</p>
+        </div>
+        <form onSubmit={(e) => { e.preventDefault(); setEmail(draftEmail.trim()); }} className="space-y-3">
+          <input
+            type="email"
+            required
+            value={draftEmail}
+            onChange={(e) => setDraftEmail(e.target.value)}
+            placeholder="you@example.com"
+            className="field"
+          />
+          <button type="submit" className="btn-primary" disabled={!draftEmail.trim()}>View return</button>
+        </form>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -57,7 +88,10 @@ export default function ReturnStatusPage() {
       <div className="text-center py-12">
         <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-3" />
         <h1 className="text-xl font-semibold text-gray-900 mb-2">Couldn't load return</h1>
-        <p className="text-gray-500">{error}</p>
+        <p className="text-gray-500 mb-4">{error}</p>
+        <button type="button" className="btn-secondary !w-auto px-4" onClick={() => { setEmail(''); setReturn(null); }}>
+          Try a different email
+        </button>
       </div>
     );
   }
@@ -108,14 +142,14 @@ export default function ReturnStatusPage() {
         <div className="flex items-center justify-between text-sm mb-2">
           <span className="text-gray-500">Total value</span>
           <span className="font-medium text-gray-900">
-            {'£'}{Number(ret.totalValue || 0).toFixed(2)}
+            {formatMoney(ret.totalValue, ret.currency)}
           </span>
         </div>
         {ret.refundAmount != null && (
           <div className="flex items-center justify-between text-sm">
             <span className="text-gray-500">Refund amount</span>
             <span className="font-medium text-gray-900">
-              {'£'}{Number(ret.refundAmount).toFixed(2)}
+              {formatMoney(ret.refundAmount, ret.currency)}
             </span>
           </div>
         )}

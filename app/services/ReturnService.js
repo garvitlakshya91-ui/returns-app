@@ -5,20 +5,26 @@ const { computeReturnFee } = require('../utils/fees');
 
 class ReturnService {
   /**
-   * Create a new return request from the customer portal.
+   * The return fee the shop's default active policy charges for these items'
+   * reasons. The fee is never charged to the buyer directly (Shopify
+   * prohibits off-platform payments): it is deducted from the refund / store
+   * credit, or added to the exchange's Shopify draft order at process time.
    */
-  static async createReturn({ shopId, shopifyOrderId, shopifyOrderName, customerEmail, customerName, items, resolution }) {
-    const totalValue = items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
-
-    // Compute the return fee from the shop's default active policy. The fee is
-    // never charged to the buyer directly (Shopify prohibits off-platform
-    // payments) — it's deducted from the refund / store credit, or added to the
-    // exchange's Shopify draft order at process time.
+  static async quoteFee(shopId, items) {
     const policy = await prisma.returnPolicy.findFirst({
       where: { shopId, isActive: true },
       orderBy: { isDefault: 'desc' },
     });
-    const returnFee = computeReturnFee(policy?.fees, items);
+    return computeReturnFee(policy?.fees, items);
+  }
+
+  /**
+   * Create a new return request from the customer portal.
+   */
+  static async createReturn({ shopId, shopifyOrderId, shopifyOrderName, customerEmail, customerName, items, resolution, currency }) {
+    const totalValue = Math.round(items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0) * 100) / 100;
+
+    const returnFee = await ReturnService.quoteFee(shopId, items);
 
     const returnRecord = await prisma.return.create({
       data: {
@@ -30,6 +36,9 @@ class ReturnService {
         totalValue,
         returnFee,
         resolution,
+        // The order's currency, so refunds and displays follow the order
+        // rather than assuming GBP.
+        ...(currency ? { currency } : {}),
         items: {
           create: items.map((item) => ({
             shopifyLineItemId: item.lineItemId,

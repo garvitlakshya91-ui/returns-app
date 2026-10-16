@@ -26,13 +26,23 @@ export function createReturn(data) {
   });
 }
 
-export function getReturnStatus(returnId) {
-  return apiFetch(`/returns/${returnId}`);
+export function getReturnStatus(returnId, email) {
+  return apiFetch(`/returns/${returnId}?email=${encodeURIComponent(email || '')}`);
 }
 
-export function uploadPhotos(returnId, files) {
+// Preview the return fee for the chosen items/reasons before submitting.
+export function quoteReturn(shopId, items) {
+  return apiFetch('/quote', {
+    method: 'POST',
+    body: JSON.stringify({ shopId, items }),
+  });
+}
+
+export function uploadPhotos(returnId, files, email, itemId) {
   const formData = new FormData();
   files.forEach((file) => formData.append('photos', file));
+  formData.append('email', email || '');
+  if (itemId) formData.append('itemId', itemId);
   return fetch(`${API_BASE}/returns/${returnId}/photos`, {
     method: 'POST',
     body: formData,

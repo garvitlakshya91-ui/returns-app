@@ -6,18 +6,24 @@ class PolicyEngine {
    * Checks against the shop's active return policies.
    */
   static async evaluateEligibility(shopId, orderItem, fulfilledAt) {
+    // Specific policies (with conditions) are tried first, newest first, and
+    // the default is the fallback. A default that happened to sort earlier
+    // used to swallow a product-specific rule.
     const policies = await prisma.returnPolicy.findMany({
       where: { shopId, isActive: true },
-      orderBy: { isDefault: 'desc' },
+      orderBy: [{ isDefault: 'asc' }, { createdAt: 'desc' }],
     });
 
     if (policies.length === 0) {
       return { eligible: false, reason: 'No active return policy' };
     }
+    // Belt and braces: never let the default be tried before a specific rule.
+    policies.sort((a, b) => Number(Boolean(a.isDefault)) - Number(Boolean(b.isDefault)));
 
     // Find the first matching policy
     for (const policy of policies) {
-      const match = PolicyEngine.matchesConditions(policy.conditions, orderItem);
+      const match = !policy.isDefault && PolicyEngine.hasConditions(policy.conditions)
+        && PolicyEngine.matchesConditions(policy.conditions, orderItem);
       if (match || policy.isDefault) {
         // Check return window
         const windowEnd = new Date(fulfilledAt);
@@ -41,6 +47,13 @@ class PolicyEngine {
     }
 
     return { eligible: false, reason: 'No matching policy' };
+  }
+
+  /** A non-default policy with no conditions would match everything; ignore it. */
+  static hasConditions(conditions) {
+    if (!conditions) return false;
+    const { productTags, collections, minPrice, maxPrice } = conditions;
+    return Boolean(productTags?.length || collections?.length || minPrice != null || maxPrice != null);
   }
 
   /**

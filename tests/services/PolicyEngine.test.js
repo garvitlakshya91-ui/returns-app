@@ -96,3 +96,37 @@ describe('PolicyEngine.matchesConditions', () => {
     )).toBe(true);
   });
 });
+
+describe('evaluateEligibility — precedence', () => {
+  it('asks for specific policies before the default, newest first', async () => {
+    prisma.returnPolicy.findMany.mockResolvedValue([]);
+    await PolicyEngine.evaluateEligibility('shop_test_1', { price: 10, tags: [], collections: [] }, new Date().toISOString());
+    expect(prisma.returnPolicy.findMany).toHaveBeenCalledWith({
+      where: { shopId: 'shop_test_1', isActive: true },
+      orderBy: [{ isDefault: 'asc' }, { createdAt: 'desc' }],
+    });
+  });
+
+  it('a matching specific policy wins over the default even when the default is listed first', async () => {
+    // Simulate a store that returns the default first (the old ordering bug).
+    prisma.returnPolicy.findMany.mockResolvedValue([
+      policy({ id: 'default', isDefault: true, windowDays: 30, resolutions: { allowRefund: true } }),
+      policy({ id: 'final-sale', isDefault: false, windowDays: 0, conditions: { productTags: ['final-sale'] }, resolutions: { allowRefund: false } }),
+    ]);
+    const fulfilled = new Date(Date.now() - 2 * 86400000).toISOString();
+    const result = await PolicyEngine.evaluateEligibility('shop_test_1', { price: 10, tags: ['final-sale'], collections: [] }, fulfilled);
+    expect(result.eligible).toBe(false);
+    expect(result.policy.id).toBe('final-sale');
+  });
+
+  it('a non-default policy with no conditions never matches (it would swallow everything)', async () => {
+    prisma.returnPolicy.findMany.mockResolvedValue([
+      policy({ id: 'empty', isDefault: false, conditions: {}, windowDays: 0 }),
+      policy({ id: 'default', isDefault: true, windowDays: 30 }),
+    ]);
+    const fulfilled = new Date(Date.now() - 2 * 86400000).toISOString();
+    const result = await PolicyEngine.evaluateEligibility('shop_test_1', { price: 10, tags: [], collections: [] }, fulfilled);
+    expect(result.eligible).toBe(true);
+    expect(result.policy.id).toBe('default');
+  });
+});

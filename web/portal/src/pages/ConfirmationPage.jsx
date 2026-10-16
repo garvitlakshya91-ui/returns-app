@@ -1,12 +1,13 @@
-import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { CheckCircle, Package, MapPin, CreditCard, Loader2 } from 'lucide-react';
 import ProgressStepper from '../components/ProgressStepper';
-import { createReturn } from '../api';
+import { createReturn, quoteReturn, uploadPhotos } from '../api';
+import { formatMoney } from '../money';
 
 const RESOLUTION_LABELS = {
   REFUND: 'Refund to original payment',
-  STORE_CREDIT: 'Store credit (gift card)',
+  STORE_CREDIT: 'Store credit',
   EXCHANGE: 'Exchange',
 };
 
@@ -22,13 +23,34 @@ const REASON_LABELS = {
 
 export default function ConfirmationPage({ data }) {
   const { shopSlug } = useParams();
+  const navigate = useNavigate();
   const [submitted, setSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(data.returnResult);
+  const [quote, setQuote] = useState(null);
+  const [photoWarning, setPhotoWarning] = useState('');
 
-  const items = data.selectedItems || [];
+  const items = useMemo(() => data.selectedItems || [], [data.selectedItems]);
+  const currency = data.order?.currency;
   const totalValue = items.reduce((sum, item) => sum + Number(item.price) * item.quantity, 0);
+
+  // A refresh loses the in-memory journey. Send the customer back to the
+  // start rather than showing an empty form with a live Submit button.
+  const incomplete = !data.order?.orderId || items.length === 0 || !data.resolution;
+  useEffect(() => {
+    if (incomplete && !submitted) navigate(`/${shopSlug}`, { replace: true });
+  }, [incomplete, submitted, shopSlug, navigate]);
+
+  // Show the fee (and what the refund will be) before the customer commits.
+  useEffect(() => {
+    if (incomplete) return;
+    quoteReturn(data.shopId, items.map((item) => ({ reason: data.reasons?.[item.id]?.reason })))
+      .then(setQuote)
+      .catch(() => setQuote(null));
+  }, [incomplete, data.shopId, data.reasons, items]);
+
+  if (incomplete && !submitted) return null;
 
   async function handleSubmit() {
     setLoading(true);
@@ -41,23 +63,30 @@ export default function ConfirmationPage({ data }) {
         orderId: data.order?.orderId,
         orderName: data.order?.orderName,
         customerEmail: data.order?.email,
+        // The server fetches titles, prices and eligibility itself; we only
+        // say which items, how many, and why.
         items: items.map((item) => ({
           lineItemId: item.lineItemId,
-          productId: item.productId,
-          variantId: item.variantId,
-          productTitle: item.title,
-          variantTitle: item.variantTitle,
-          sku: item.sku,
           quantity: item.quantity,
-          unitPrice: item.price,
           reason: data.reasons?.[item.id]?.reason,
           reasonDetail: data.reasons?.[item.id]?.detail,
-          photoUrls: [],
         })),
         resolution: data.resolution,
-        carrier: data.carrier,
-        dropoff: data.dropoff,
       });
+
+      // Attach the photos chosen on the reason step to their items.
+      const failed = [];
+      for (const item of items) {
+        const files = (data.photos?.[item.id] || []).map((p) => p.file).filter(Boolean);
+        if (files.length === 0) continue;
+        const saved = (returnResult.items || []).find((ri) => ri.shopifyLineItemId === item.lineItemId);
+        try {
+          await uploadPhotos(returnResult.id, files, data.order?.email, saved?.id);
+        } catch {
+          failed.push(item.title);
+        }
+      }
+      if (failed.length) setPhotoWarning(`Your return was submitted, but photos for ${failed.join(', ')} could not be uploaded.`);
 
       setResult(returnResult);
       setSubmitted(true);
@@ -87,10 +116,16 @@ export default function ConfirmationPage({ data }) {
             <p className="font-mono text-lg font-semibold text-gray-900">{result.id || 'RF-PENDING'}</p>
           </div>
 
+          {photoWarning && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-left text-sm mb-6 text-amber-800">
+              {photoWarning}
+            </div>
+          )}
+
           {Number(result.returnFee || 0) > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-left text-sm mb-6">
               <p className="font-medium text-amber-900">
-                {'£'}{Number(result.returnFee).toFixed(2)} return fee
+                {formatMoney(result.returnFee, result.currency || currency)} return fee
               </p>
               <p className="text-amber-700 mt-0.5">
                 {data.resolution === 'EXCHANGE'
@@ -138,14 +173,26 @@ export default function ConfirmationPage({ data }) {
                   {item.variantTitle} — {REASON_LABELS[data.reasons?.[item.id]?.reason] || 'No reason'}
                 </p>
               </div>
-              <span className="font-medium text-gray-900">{'\u00A3'}{Number(item.price).toFixed(2)}</span>
+              <span className="font-medium text-gray-900">{item.quantity > 1 ? `${item.quantity} × ` : ''}{formatMoney(item.price, currency)}</span>
             </div>
           ))}
         </div>
         <div className="border-t border-gray-100 mt-3 pt-3 flex items-center justify-between font-medium">
           <span>Total return value</span>
-          <span>{'\u00A3'}{totalValue.toFixed(2)}</span>
+          <span>{formatMoney(totalValue, currency)}</span>
         </div>
+        {quote && Number(quote.fee || 0) > 0 && data.resolution !== 'EXCHANGE' && (
+          <>
+            <div className="flex items-center justify-between text-sm text-amber-700 mt-2">
+              <span>Return fee (deducted from your refund)</span>
+              <span>-{formatMoney(quote.fee, currency)}</span>
+            </div>
+            <div className="flex items-center justify-between font-medium mt-1">
+              <span>You will receive</span>
+              <span>{formatMoney(Math.max(0, totalValue - Number(quote.fee)), currency)}</span>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Resolution */}

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight } from 'lucide-react';
 import ProgressStepper from '../components/ProgressStepper';
 import OrderItemCard from '../components/OrderItemCard';
+import { formatMoney } from '../money';
 
 export default function SelectItemsPage({ data, update }) {
   const { shopSlug } = useParams();
@@ -58,6 +59,7 @@ export default function SelectItemsPage({ data, update }) {
           <OrderItemCard
             key={item.id}
             item={item}
+            currency={data.order?.currency}
             selected={selected.some((s) => s.id === item.id)}
             onToggle={toggleItem}
           />
@@ -67,7 +69,7 @@ export default function SelectItemsPage({ data, update }) {
       {selected.length > 0 && (
         <div className="rounded-xl bg-indigo-50/70 border border-indigo-100 px-4 py-3 mb-6 text-sm text-gray-600">
           <span className="font-semibold text-gray-900">{selected.length} item{selected.length !== 1 ? 's' : ''}</span>
-          {' '}selected — Total: {'\u00A3'}{selected.reduce((sum, item) => sum + Number(item.price) * item.quantity, 0).toFixed(2)}
+          {' '}selected — Total: {formatMoney(selected.reduce((sum, item) => sum + Number(item.price) * item.quantity, 0), data.order?.currency)}
         </div>
       )}
 

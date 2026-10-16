@@ -1,6 +1,7 @@
 import { Check } from 'lucide-react';
+import { formatMoney } from '../money';
 
-export default function OrderItemCard({ item, selected, onToggle, disabled }) {
+export default function OrderItemCard({ item, selected, onToggle, disabled, currency }) {
   return (
     <button
       type="button"
@@ -35,7 +36,7 @@ export default function OrderItemCard({ item, selected, onToggle, disabled }) {
           )}
           <div className="flex items-center gap-2 mt-1.5">
             <span className="text-sm font-semibold text-gray-900">
-              {'£'}{Number(item.price).toFixed(2)}
+              {formatMoney(item.price, currency)}
             </span>
             <span className="text-xs text-gray-400">·</span>
             <span className="text-sm text-gray-400">Qty {item.quantity}</span>

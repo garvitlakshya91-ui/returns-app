@@ -1,6 +1,6 @@
 require('@shopify/shopify-api/adapters/node');
 const { shopifyApi, ApiVersion, LogSeverity } = require('@shopify/shopify-api');
-const { restResources } = require('@shopify/shopify-api/rest/admin/2025-04');
+const { restResources } = require('@shopify/shopify-api/rest/admin/2026-01');
 
 const shopify = shopifyApi({
   apiKey: process.env.SHOPIFY_API_KEY,
@@ -8,7 +8,7 @@ const shopify = shopifyApi({
   scopes: (process.env.SCOPES || '').split(',').filter(Boolean),
   hostName: (process.env.HOST || '').replace(/https?:\/\//, ''),
   hostScheme: 'https',
-  apiVersion: ApiVersion.April25,
+  apiVersion: ApiVersion.January26,
   isEmbeddedApp: true,
   logger: {
     level: process.env.NODE_ENV === 'production' ? LogSeverity.Error : LogSeverity.Info,

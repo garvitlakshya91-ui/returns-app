@@ -6,7 +6,7 @@ const prisma = require('../../config/database');
 const shopify = require('../../config/shopify');
 const ShopToken = require('../../services/ShopToken');
 const ReturnService = require('../../services/ReturnService');
-const PolicyEngine = require('../../services/PolicyEngine');
+const ReturnValidation = require('../../services/ReturnValidation');
 const StorageService = require('../../services/StorageService');
 const LabelService = require('../../services/LabelService');
 const logger = require('../../utils/logger');
@@ -65,26 +65,13 @@ router.post('/lookup', lookupLimiter, async (req, res) => {
     const session = { shop: shop.shopifyDomain, accessToken };
     const client = new shopify.clients.Graphql({ session });
 
+    // Find the order by number + email, then load everything about it
+    // through the same path the create step uses, so what the customer is
+    // shown is exactly what the server will accept.
     const response = await client.request(`
       query lookupOrder($query: String!) {
         orders(first: 1, query: $query) {
-          edges {
-            node {
-              id name email createdAt displayFulfillmentStatus
-              fulfillments(first: 1) { createdAt }
-              lineItems(first: 50) {
-                edges {
-                  node {
-                    id title variantTitle quantity sku
-                    originalUnitPriceSet { shopMoney { amount } }
-                    image { url }
-                    product { id tags collections(first: 10) { edges { node { handle } } } }
-                    variant { id }
-                  }
-                }
-              }
-            }
-          }
+          edges { node { id email } }
         }
       }
     `, {
@@ -98,48 +85,30 @@ router.post('/lookup', lookupLimiter, async (req, res) => {
       return res.status(404).json({ error: 'Order not found. Please check your email and order number.' });
     }
 
-    const orderData = orders[0].node;
-    if ((orderData.email || '').toLowerCase() !== String(email).toLowerCase()) {
+    const found = orders[0].node;
+    if ((found.email || '').toLowerCase() !== String(email).trim().toLowerCase()) {
       return res.status(404).json({ error: 'Order not found. Please check your email and order number.' });
     }
 
-    const fulfilledAt = orderData.fulfillments?.[0]?.createdAt || orderData.createdAt;
-    const lineItems = orderData.lineItems.edges.map((e) => e.node);
-
-    const eligibleItems = [];
-    for (const item of lineItems) {
-      const eligibility = await PolicyEngine.evaluateEligibility(shop.id, {
-        price: Number(item.originalUnitPriceSet.shopMoney.amount),
-        tags: item.product?.tags || [],
-        collections: (item.product?.collections?.edges || []).map((e) => e.node.handle),
-      }, fulfilledAt);
-
-      if (eligibility.eligible) {
-        eligibleItems.push({
-          id: item.id,
-          lineItemId: item.id,
-          productId: item.product?.id,
-          variantId: item.variant?.id,
-          title: item.title,
-          variantTitle: item.variantTitle,
-          price: Number(item.originalUnitPriceSet.shopMoney.amount),
-          quantity: item.quantity,
-          sku: item.sku,
-          imageUrl: item.image?.url || null,
-        });
-      }
-    }
+    const { order, items } = await ReturnValidation.loadOrder(shop, found.id);
 
     res.json({
       shopId: shop.id,
       shopName: shop.name,
-      orderId: orderData.id,
-      orderName: orderData.name,
-      email: orderData.email,
-      fulfillmentStatus: orderData.displayFulfillmentStatus,
-      eligibleItems,
+      orderId: order.id,
+      orderName: order.name,
+      email: order.email,
+      currency: order.currency,
+      fulfillmentStatus: order.fulfillmentStatus,
+      // Only items the customer can still return, with how many and which
+      // resolutions their policy allows.
+      eligibleItems: items.filter((i) => i.eligible).map(({ eligible, ineligibleReason, policyId, ...item }) => item),
+      features: { exchanges: ReturnValidation.EXCHANGES_ENABLED },
     });
   } catch (err) {
+    if (err instanceof ReturnValidation.ValidationError) {
+      return res.status(err.status).json({ error: err.message });
+    }
     logger.error({ err }, 'Portal lookup error');
     res.status(500).json({ error: 'Failed to look up order' });
   }
@@ -153,17 +122,10 @@ router.post('/lookup', lookupLimiter, async (req, res) => {
  */
 router.post('/returns', createReturnLimiter, loadShopFromBody, planGate('createReturn'), async (req, res) => {
   try {
-    const { shopId, items, resolution, customerEmail, orderId, orderName } = req.body;
+    const { shopId, items, resolution, customerEmail, orderId } = req.body;
 
     if (!items?.length || !resolution) {
       return res.status(400).json({ error: 'items and resolution are required' });
-    }
-
-    // The return must be tied to the order found in the lookup step — without
-    // a real order id the merchant can never process the refund later. (The
-    // old silent 'pending' fallback produced returns that 500'd on refund.)
-    if (!orderId) {
-      return res.status(400).json({ error: 'orderId is required — please start again from the order lookup step' });
     }
 
     if (resolution === 'EXCHANGE') {
@@ -177,51 +139,87 @@ router.post('/returns', createReturnLimiter, loadShopFromBody, planGate('createR
       }
     }
 
+    // Nothing from the browser is trusted beyond "which items, how many,
+    // why, and what outcome": ownership, eligibility, remaining quantities,
+    // prices and titles all come from Shopify and our own records.
+    const validated = await ReturnValidation.validateCreate(req.shop, {
+      orderId, customerEmail, items, resolution,
+    });
+
     const returnRecord = await ReturnService.createReturn({
       shopId,
-      shopifyOrderId: orderId,
-      shopifyOrderName: orderName || 'unknown',
-      customerEmail: customerEmail || 'unknown@email.com',
-      customerName: req.body.customerName || 'Customer',
-      items,
+      shopifyOrderId: validated.order.id,
+      shopifyOrderName: validated.order.name,
+      customerEmail: validated.order.email,
+      customerName: req.body.customerName ? String(req.body.customerName).slice(0, 200) : 'Customer',
+      currency: validated.order.currency,
+      items: validated.items,
       resolution,
     });
 
     res.status(201).json(returnRecord);
   } catch (err) {
+    if (err instanceof ReturnValidation.ValidationError) {
+      return res.status(err.status).json({ error: err.message });
+    }
     logger.error({ err }, 'Create return error');
     res.status(500).json({ error: 'Failed to create return' });
   }
 });
 
 /**
- * GET /api/portal/returns/:id
+ * POST /api/portal/quote
+ * The return fee the shop's policy would charge for these reasons, so the
+ * customer sees it before submitting. Reads nothing from Shopify.
+ */
+router.post('/quote', loadShopFromBody, async (req, res) => {
+  try {
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    const fee = await ReturnService.quoteFee(req.shop.id, items);
+    res.json({ fee, currency: req.shop.currency || 'GBP' });
+  } catch (err) {
+    logger.error({ err }, 'Quote error');
+    res.status(500).json({ error: 'Failed to quote return fee' });
+  }
+});
+
+/**
+ * Load a return for a customer-facing route. The customer proves it is
+ * theirs with the email the return was made under; an id alone is not
+ * enough to see photos, labels or events. Returns null (and sends 404)
+ * when the return is missing or the email does not match.
+ */
+async function loadCustomerReturn(req, res, email, include = {}) {
+  const clean = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  if (!clean) {
+    res.status(400).json({ error: 'email is required' });
+    return null;
+  }
+  const returnRecord = await prisma.return.findUnique({ where: { id: req.params.id }, include });
+  if (!returnRecord || returnRecord.customerEmail.toLowerCase() !== clean) {
+    res.status(404).json({ error: 'Return not found' });
+    return null;
+  }
+  return returnRecord;
+}
+
+/**
+ * GET /api/portal/returns/:id?email=
  */
 router.get('/returns/:id', async (req, res) => {
   try {
-    const { email } = req.query;
-
-    const returnRecord = await prisma.return.findUnique({
-      where: { id: req.params.id },
-      include: {
-        items: true,
-        label: true,
-        events: { orderBy: { createdAt: 'desc' }, take: 10 },
-      },
+    const returnRecord = await loadCustomerReturn(req, res, req.query.email, {
+      items: true,
+      label: true,
+      events: { orderBy: { createdAt: 'desc' }, take: 10 },
     });
-
-    if (!returnRecord) {
-      return res.status(404).json({ error: 'Return not found' });
-    }
-
-    if (email && returnRecord.customerEmail.toLowerCase() !== email.toLowerCase()) {
-      return res.status(404).json({ error: 'Return not found' });
-    }
+    if (!returnRecord) return;
 
     res.json({
       id: returnRecord.id,
       status: returnRecord.status,
       resolution: returnRecord.resolution,
+      currency: returnRecord.currency,
       totalValue: returnRecord.totalValue,
       refundAmount: returnRecord.refundAmount,
       items: returnRecord.items,
@@ -243,11 +241,8 @@ router.get('/returns/:id', async (req, res) => {
 router.post('/returns/:id/photos', upload.array('photos', 5), async (req, res) => {
   try {
     const { itemId } = req.body;
-    const returnRecord = await prisma.return.findUnique({
-      where: { id: req.params.id },
-      include: { items: true },
-    });
-    if (!returnRecord) return res.status(404).json({ error: 'Return not found' });
+    const returnRecord = await loadCustomerReturn(req, res, req.body.email, { items: true });
+    if (!returnRecord) return;
 
     const urls = [];
     for (const file of req.files || []) {
@@ -283,9 +278,15 @@ router.post('/returns/:id/photos/presign', async (req, res) => {
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) {
       return res.status(400).json({ error: 'Invalid content type' });
     }
+    if (!Number.isInteger(contentLength) || contentLength <= 0) {
+      return res.status(400).json({ error: 'contentLength must be the file size in bytes' });
+    }
     if (contentLength > 5 * 1024 * 1024) {
       return res.status(400).json({ error: 'File too large (max 5MB)' });
     }
+
+    const returnRecord = await loadCustomerReturn(req, res, req.body.email);
+    if (!returnRecord) return;
 
     const result = await StorageService.getPresignedUploadUrl({
       returnId: req.params.id,

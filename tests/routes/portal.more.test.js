@@ -15,6 +15,7 @@ let returnService;
 let storage;
 let labelService;
 let dropoffAdapter;
+let validation;
 
 // Tiny valid-enough PNG header; multer never inspects content so any bytes work,
 // but keep it image-shaped for realism.
@@ -69,6 +70,28 @@ beforeEach(() => {
     evaluateEligibility: jest.fn().mockResolvedValue({ eligible: true, policy: {}, resolutions: {}, fees: null }),
   };
   jest.doMock('../../app/services/PolicyEngine', () => policyEngine);
+
+
+  // ReturnValidation (ownership, eligibility, prices) has its own unit tests;
+  // here it is stubbed so the route layer is what is under test.
+  validation = {
+    EXCHANGES_ENABLED: false,
+    ValidationError: class ValidationError extends Error {
+      constructor(status, message) { super(message); this.status = status; }
+    },
+    loadOrder: jest.fn().mockResolvedValue({
+      order: { id: 'gid://shopify/Order/1001', name: '#1001', email: 'jane@x.com', currency: 'GBP', fulfillmentStatus: 'FULFILLED' },
+      items: [],
+    }),
+    validateCreate: jest.fn().mockImplementation(async (shop, { orderId, customerEmail, items, resolution }) => ({
+      order: { id: orderId, name: '#1001', email: customerEmail, currency: 'GBP' },
+      items: items.map((i) => ({
+        lineItemId: i.lineItemId, productId: 'p1', variantId: 'v1', productTitle: 'Wool jumper', variantTitle: 'M',
+        sku: 'WJ', quantity: i.quantity, unitPrice: 47.5, reason: i.reason, reasonDetail: i.reasonDetail || null, photoUrls: [],
+      })),
+    })),
+  };
+  jest.doMock('../../app/services/ReturnValidation', () => validation);
 
   returnService = {
     createReturn: jest.fn().mockImplementation(async (args) => ({ id: 'ret_new', returnFee: 0, ...args })),
@@ -203,21 +226,34 @@ describe('POST /api/portal/lookup — shop resolution & Shopify query', () => {
 });
 
 describe('POST /api/portal/lookup — eligibility & response shape', () => {
+  const found = (email = 'jane@x.com') => ({ data: { orders: { edges: [{ node: { id: 'gid://shopify/Order/1001', email } }] } } });
+  const loaded = (items) => ({
+    order: { id: 'gid://shopify/Order/1001', name: '#1001', email: 'Jane@X.com', currency: 'GBP', fulfillmentStatus: 'FULFILLED', fulfilledAt: '2026-01-05T00:00:00Z' },
+    items,
+  });
+  const item = (over = {}) => ({
+    id: 'gid://shopify/LineItem/1', lineItemId: 'gid://shopify/LineItem/1', productId: 'gid://shopify/Product/1',
+    variantId: 'gid://shopify/ProductVariant/1', title: 'Wool jumper', variantTitle: 'M / Navy', price: 47.5, quantity: 1,
+    sku: 'WJ-M-NAV', imageUrl: 'https://cdn/x.jpg', eligible: true, ineligibleReason: null,
+    resolutions: ['REFUND', 'STORE_CREDIT'], policyId: 'pol_1', ...over,
+  });
+
   it('matches order email case-insensitively and returns the full response shape', async () => {
     primeShopLookup();
-    shopifyClient.request.mockResolvedValue({
-      data: { orders: { edges: [{ node: orderNode({ email: 'Jane@X.com', lineItems: { edges: [{ node: lineItem() }] } }) }] } },
-    });
+    shopifyClient.request.mockResolvedValue(found('Jane@X.com'));
+    validation.loadOrder.mockResolvedValue(loaded([item()]));
 
     const res = await request(app).post('/api/portal/lookup').send({ email: 'jane@x.com', orderNumber: '#1001', shopSlug: 'test-shop' });
 
     expect(res.status).toBe(200);
+    expect(validation.loadOrder).toHaveBeenCalledWith(expect.objectContaining({ id: 'shop_test_1' }), 'gid://shopify/Order/1001');
     expect(res.body).toEqual({
       shopId: 'shop_test_1',
       shopName: 'Test Shop',
       orderId: 'gid://shopify/Order/1001',
       orderName: '#1001',
       email: 'Jane@X.com',
+      currency: 'GBP',
       fulfillmentStatus: 'FULFILLED',
       eligibleItems: [{
         id: 'gid://shopify/LineItem/1',
@@ -230,153 +266,110 @@ describe('POST /api/portal/lookup — eligibility & response shape', () => {
         quantity: 1,
         sku: 'WJ-M-NAV',
         imageUrl: 'https://cdn/x.jpg',
+        resolutions: ['REFUND', 'STORE_CREDIT'],
       }],
+      features: { exchanges: false },
     });
-    // The response must never leak the shop's token or internal settings.
+    // The response must never leak the shop's token, internal settings or policy ids.
     expect(res.body).not.toHaveProperty('shopifyToken');
     expect(res.body).not.toHaveProperty('settings');
+    expect(res.body.eligibleItems[0]).not.toHaveProperty('policyId');
   });
 
-  it('passes price/tags/collections and the fulfillment date to PolicyEngine for every line item', async () => {
+  it('leaves out items the customer cannot return (ineligible or nothing left)', async () => {
     primeShopLookup();
-    shopifyClient.request.mockResolvedValue({
-      data: { orders: { edges: [{ node: orderNode({ lineItems: { edges: [{ node: lineItem() }] } }) }] } },
-    });
-
-    await request(app).post('/api/portal/lookup').send({ email: 'jane@x.com', orderNumber: '#1001', shopSlug: 'test-shop' });
-
-    expect(policyEngine.evaluateEligibility).toHaveBeenCalledTimes(1);
-    expect(policyEngine.evaluateEligibility).toHaveBeenCalledWith(
-      'shop_test_1',
-      { price: 47.5, tags: ['knitwear'], collections: ['winter'] },
-      '2026-01-05T00:00:00Z',
-    );
-  });
-
-  it('falls back to the order createdAt when the order has no fulfillments', async () => {
-    primeShopLookup();
-    shopifyClient.request.mockResolvedValue({
-      data: { orders: { edges: [{ node: orderNode({ fulfillments: [], lineItems: { edges: [{ node: lineItem() }] } }) }] } },
-    });
-
-    await request(app).post('/api/portal/lookup').send({ email: 'jane@x.com', orderNumber: '#1001', shopSlug: 'test-shop' });
-
-    expect(policyEngine.evaluateEligibility.mock.calls[0][2]).toBe('2026-01-01T00:00:00Z');
-  });
-
-  it('filters out line items the PolicyEngine marks ineligible', async () => {
-    primeShopLookup();
-    shopifyClient.request.mockResolvedValue({
-      data: {
-        orders: {
-          edges: [{
-            node: orderNode({
-              lineItems: {
-                edges: [
-                  { node: lineItem({ id: 'li_ok', title: 'Returnable' }) },
-                  { node: lineItem({ id: 'li_final', title: 'Final sale', product: { id: 'p2', tags: ['final-sale'], collections: { edges: [] } } }) },
-                ],
-              },
-            }),
-          }],
-        },
-      },
-    });
-    policyEngine.evaluateEligibility.mockImplementation(async (shopId, { tags }) => ({
-      eligible: !tags.includes('final-sale'),
-      reason: tags.includes('final-sale') ? 'Final sale items cannot be returned' : undefined,
-    }));
+    shopifyClient.request.mockResolvedValue(found());
+    validation.loadOrder.mockResolvedValue(loaded([
+      item({ id: 'li_ok', lineItemId: 'li_ok' }),
+      item({ id: 'li_final', lineItemId: 'li_final', eligible: false, ineligibleReason: 'Final sale' }),
+      item({ id: 'li_done', lineItemId: 'li_done', eligible: false, quantity: 0, ineligibleReason: 'Already returned' }),
+    ]));
 
     const res = await request(app).post('/api/portal/lookup').send({ email: 'jane@x.com', orderNumber: '#1001', shopSlug: 'test-shop' });
 
     expect(res.status).toBe(200);
     expect(res.body.eligibleItems.map((i) => i.id)).toEqual(['li_ok']);
-    expect(policyEngine.evaluateEligibility).toHaveBeenCalledTimes(2);
   });
 
   it('returns an empty eligibleItems list (200, not 404) when nothing is eligible', async () => {
     primeShopLookup();
-    shopifyClient.request.mockResolvedValue({
-      data: { orders: { edges: [{ node: orderNode({ lineItems: { edges: [{ node: lineItem() }] } }) }] } },
-    });
-    policyEngine.evaluateEligibility.mockResolvedValue({ eligible: false, reason: 'Return window expired' });
+    shopifyClient.request.mockResolvedValue(found());
+    validation.loadOrder.mockResolvedValue(loaded([item({ eligible: false, ineligibleReason: 'Return window expired' })]));
 
     const res = await request(app).post('/api/portal/lookup').send({ email: 'jane@x.com', orderNumber: '#1001', shopSlug: 'test-shop' });
     expect(res.status).toBe(200);
     expect(res.body.eligibleItems).toEqual([]);
   });
 
-  it('tolerates line items with no product/variant/image (deleted products)', async () => {
+  it('passes a ValidationError from the order load through with its status', async () => {
     primeShopLookup();
-    shopifyClient.request.mockResolvedValue({
-      data: {
-        orders: {
-          edges: [{
-            node: orderNode({
-              lineItems: { edges: [{ node: lineItem({ product: null, variant: null, image: null }) }] },
-            }),
-          }],
-        },
-      },
-    });
+    shopifyClient.request.mockResolvedValue(found());
+    validation.loadOrder.mockRejectedValue(new validation.ValidationError(404, 'Order not found. Please check your email and order number.'));
 
     const res = await request(app).post('/api/portal/lookup').send({ email: 'jane@x.com', orderNumber: '#1001', shopSlug: 'test-shop' });
-
-    expect(res.status).toBe(200);
-    expect(policyEngine.evaluateEligibility).toHaveBeenCalledWith(
-      'shop_test_1',
-      { price: 47.5, tags: [], collections: [] },
-      expect.any(String),
-    );
-    // undefined productId/variantId are dropped by JSON serialisation; imageUrl is an explicit null
-    expect(res.body.eligibleItems[0]).not.toHaveProperty('productId');
-    expect(res.body.eligibleItems[0]).not.toHaveProperty('variantId');
-    expect(res.body.eligibleItems[0].imageUrl).toBeNull();
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/Order not found/);
   });
 });
 
-describe('POST /api/portal/returns — pass-through & errors', () => {
+describe('POST /api/portal/returns — validation & errors', () => {
   const validBody = {
     shopId: 'shop_test_1',
     orderId: 'gid://shopify/Order/1001',
-    orderName: '#1001',
     customerEmail: 'jane@x.com',
     customerName: 'Jane Doe',
-    items: [{ lineItemId: 'li1', productTitle: 'Tee', quantity: 1, unitPrice: 20, reason: 'doesnt_fit' }],
+    items: [{ lineItemId: 'li1', quantity: 1, reason: 'doesnt_fit', reasonDetail: 'tight' }],
     resolution: 'REFUND',
   };
 
-  it('loads the shop from body.shopId and passes every field through to ReturnService', async () => {
+  it('validates the request against Shopify and saves only the server-built items', async () => {
     prisma.shop.findUnique.mockResolvedValue(fakeShop({ plan: 'GROWTH' }));
 
-    const res = await request(app).post('/api/portal/returns').send(validBody);
+    const res = await request(app).post('/api/portal/returns').send({
+      ...validBody,
+      // Anything the browser says about money or titles is ignored.
+      items: [{ ...validBody.items[0], unitPrice: 99999, productTitle: 'Yacht' }],
+      orderName: '#FAKE',
+    });
 
     expect(res.status).toBe(201);
-    expect(prisma.shop.findUnique).toHaveBeenCalledWith({ where: { id: 'shop_test_1' } });
+    expect(validation.validateCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'shop_test_1' }),
+      { orderId: 'gid://shopify/Order/1001', customerEmail: 'jane@x.com', items: expect.any(Array), resolution: 'REFUND' },
+    );
     expect(returnService.createReturn).toHaveBeenCalledWith({
       shopId: 'shop_test_1',
       shopifyOrderId: 'gid://shopify/Order/1001',
       shopifyOrderName: '#1001',
       customerEmail: 'jane@x.com',
       customerName: 'Jane Doe',
-      items: validBody.items,
+      currency: 'GBP',
+      items: [expect.objectContaining({ lineItemId: 'li1', quantity: 1, unitPrice: 47.5, productTitle: 'Wool jumper', reason: 'doesnt_fit' })],
       resolution: 'REFUND',
     });
-    expect(res.body).toMatchObject({ id: 'ret_new', shopId: 'shop_test_1', shopifyOrderId: 'gid://shopify/Order/1001' });
+    expect(res.body).toMatchObject({ id: 'ret_new', shopId: 'shop_test_1' });
   });
 
-  it('applies documented defaults when orderName / customerEmail / customerName are omitted', async () => {
+  it('defaults customerName to "Customer" and caps its length', async () => {
     prisma.shop.findUnique.mockResolvedValue(fakeShop({ plan: 'GROWTH' }));
-    const { orderName, customerEmail, customerName, ...minimal } = validBody;
+    const { customerName, ...minimal } = validBody;
 
-    const res = await request(app).post('/api/portal/returns').send(minimal);
+    await request(app).post('/api/portal/returns').send(minimal);
+    expect(returnService.createReturn).toHaveBeenCalledWith(expect.objectContaining({ customerName: 'Customer' }));
 
-    expect(res.status).toBe(201);
-    expect(returnService.createReturn).toHaveBeenCalledWith(expect.objectContaining({
-      shopifyOrderName: 'unknown',
-      customerEmail: 'unknown@email.com',
-      customerName: 'Customer',
-    }));
+    await request(app).post('/api/portal/returns').send({ ...validBody, customerName: 'x'.repeat(500) });
+    expect(returnService.createReturn.mock.calls[1][0].customerName).toHaveLength(200);
+  });
+
+  it('returns a ValidationError with its own status and message', async () => {
+    prisma.shop.findUnique.mockResolvedValue(fakeShop({ plan: 'GROWTH' }));
+    validation.validateCreate.mockRejectedValue(new validation.ValidationError(409, 'A return for these items is already open'));
+
+    const res = await request(app).post('/api/portal/returns').send(validBody);
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: 'A return for these items is already open' });
+    expect(returnService.createReturn).not.toHaveBeenCalled();
   });
 
   it('400 when items is an empty array', async () => {
@@ -384,21 +377,14 @@ describe('POST /api/portal/returns — pass-through & errors', () => {
     const res = await request(app).post('/api/portal/returns').send({ ...validBody, items: [] });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/items and resolution/);
-    expect(returnService.createReturn).not.toHaveBeenCalled();
+    expect(validation.validateCreate).not.toHaveBeenCalled();
   });
 
-  it('validates items/resolution before orderId (orderId-less request with no items is a 400 about items)', async () => {
-    prisma.shop.findUnique.mockResolvedValue(fakeShop({ plan: 'GROWTH' }));
-    const res = await request(app).post('/api/portal/returns').send({ shopId: 'shop_test_1', resolution: 'REFUND' });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/items and resolution/);
-  });
-
-  it('allows EXCHANGE on STARTER (first plan with exchanges enabled)', async () => {
+  it('allows EXCHANGE through plan gating on STARTER (the validator decides if exchanges exist yet)', async () => {
     prisma.shop.findUnique.mockResolvedValue(fakeShop({ plan: 'STARTER' }));
     const res = await request(app).post('/api/portal/returns').send({ ...validBody, resolution: 'EXCHANGE' });
     expect(res.status).toBe(201);
-    expect(returnService.createReturn).toHaveBeenCalledWith(expect.objectContaining({ resolution: 'EXCHANGE' }));
+    expect(validation.validateCreate).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ resolution: 'EXCHANGE' }));
   });
 
   it('treats an unknown plan as FREE and blocks exchanges', async () => {
@@ -406,7 +392,7 @@ describe('POST /api/portal/returns — pass-through & errors', () => {
     const res = await request(app).post('/api/portal/returns').send({ ...validBody, resolution: 'EXCHANGE' });
     expect(res.status).toBe(403);
     expect(res.body).toEqual({ error: 'Exchanges require Starter plan or higher', plan: 'LEGACY_UNKNOWN', upgradeRequired: true });
-    expect(returnService.createReturn).not.toHaveBeenCalled();
+    expect(validation.validateCreate).not.toHaveBeenCalled();
   });
 
   it('500 when ReturnService.createReturn throws', async () => {
@@ -425,8 +411,19 @@ describe('POST /api/portal/returns — pass-through & errors', () => {
   });
 });
 
+describe('POST /api/portal/quote', () => {
+  it('returns the fee the policy would charge for these reasons', async () => {
+    prisma.shop.findUnique.mockResolvedValue(fakeShop({ currency: 'GBP' }));
+    returnService.quoteFee = jest.fn().mockResolvedValue(2.5);
+    const res = await request(app).post('/api/portal/quote').send({ shopId: 'shop_test_1', items: [{ reason: 'changed_mind' }] });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ fee: 2.5, currency: 'GBP' });
+    expect(returnService.quoteFee).toHaveBeenCalledWith('shop_test_1', [{ reason: 'changed_mind' }]);
+  });
+});
+
 describe('GET /api/portal/returns/:id', () => {
-  it('returns the public status shape including label and recent events, without leaking internals', async () => {
+  it('returns the public status shape to the customer who made it, without leaking internals', async () => {
     const label = { id: 'lbl1', carrier: 'evri', trackingCode: 'TRK123', labelUrl: 'https://r2/label.pdf', qrCodeUrl: null, status: 'created' };
     const events = [{ id: 'ev2', type: 'return.approved', actor: 'merchant', createdAt: '2026-01-16T00:00:00.000Z' }];
     prisma.return.findUnique.mockResolvedValue(fakeReturn({
@@ -437,7 +434,7 @@ describe('GET /api/portal/returns/:id', () => {
       refundAmount: 45,
     }));
 
-    const res = await request(app).get('/api/portal/returns/ret_test_1');
+    const res = await request(app).get('/api/portal/returns/ret_test_1?email=Jane@Example.com');
 
     expect(res.status).toBe(200);
     expect(prisma.return.findUnique).toHaveBeenCalledWith({
@@ -448,6 +445,7 @@ describe('GET /api/portal/returns/:id', () => {
       id: 'ret_test_1',
       status: 'REQUESTED',
       resolution: 'REFUND',
+      currency: 'GBP',
       totalValue: 47.5,
       refundAmount: 45,
       label,
@@ -461,16 +459,23 @@ describe('GET /api/portal/returns/:id', () => {
     expect(res.body).not.toHaveProperty('customerEmail');
   });
 
-  it('serves the return when no email query is supplied (email check is optional as coded)', async () => {
+  it('400 without an email — knowing the id is not enough to see photos, labels or events', async () => {
     prisma.return.findUnique.mockResolvedValue(fakeReturn());
     const res = await request(app).get('/api/portal/returns/ret_test_1');
-    expect(res.status).toBe(200);
-    expect(res.body.id).toBe('ret_test_1');
+    expect(res.status).toBe(400);
+    expect(prisma.return.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('404 when the email is not the one the return was made under', async () => {
+    prisma.return.findUnique.mockResolvedValue(fakeReturn());
+    const res = await request(app).get('/api/portal/returns/ret_test_1?email=someone@else.com');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Return not found' });
   });
 
   it('500 when the database throws', async () => {
     prisma.return.findUnique.mockRejectedValue(new Error('db down'));
-    const res = await request(app).get('/api/portal/returns/ret_test_1');
+    const res = await request(app).get('/api/portal/returns/ret_test_1?email=jane@example.com');
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: 'Internal server error' });
   });
@@ -481,6 +486,17 @@ describe('POST /api/portal/returns/:id/photos', () => {
     prisma.return.findUnique.mockResolvedValue(null);
     const res = await request(app)
       .post('/api/portal/returns/missing/photos')
+      .field('email', 'jane@example.com')
+      .attach('photos', PNG, { filename: 'a.png', contentType: 'image/png' });
+    expect(res.status).toBe(404);
+    expect(storage.uploadReturnPhoto).not.toHaveBeenCalled();
+  });
+
+  it('404 when the email does not match the return (nothing uploaded)', async () => {
+    prisma.return.findUnique.mockResolvedValue(fakeReturn());
+    const res = await request(app)
+      .post('/api/portal/returns/ret_test_1/photos')
+      .field('email', 'intruder@example.com')
       .attach('photos', PNG, { filename: 'a.png', contentType: 'image/png' });
     expect(res.status).toBe(404);
     expect(storage.uploadReturnPhoto).not.toHaveBeenCalled();
@@ -492,6 +508,7 @@ describe('POST /api/portal/returns/:id/photos', () => {
 
     const res = await request(app)
       .post('/api/portal/returns/ret_test_1/photos')
+      .field('email', 'jane@example.com')
       .field('itemId', 'item_test_1')
       .attach('photos', PNG, { filename: 'a.png', contentType: 'image/png' })
       .attach('photos', PNG, { filename: 'b.jpg', contentType: 'image/jpeg' });
@@ -515,6 +532,7 @@ describe('POST /api/portal/returns/:id/photos', () => {
 
     const res = await request(app)
       .post('/api/portal/returns/ret_test_1/photos')
+      .field('email', 'jane@example.com')
       .field('itemId', 'item_from_other_return')
       .attach('photos', PNG, { filename: 'a.png', contentType: 'image/png' });
 
@@ -528,6 +546,7 @@ describe('POST /api/portal/returns/:id/photos', () => {
 
     const res = await request(app)
       .post('/api/portal/returns/ret_test_1/photos')
+      .field('email', 'jane@example.com')
       .field('itemId', 'item_test_1')
       .attach('photos', Buffer.from('%PDF-1.4'), { filename: 'doc.pdf', contentType: 'application/pdf' });
 
@@ -545,6 +564,7 @@ describe('POST /api/portal/returns/:id/photos', () => {
     prisma.return.findUnique.mockResolvedValue(fakeReturn());
     const res = await request(app)
       .post('/api/portal/returns/ret_test_1/photos')
+      .field('email', 'jane@example.com')
       .attach('photos', PNG, { filename: 'a.heic', contentType: 'image/heic' })
       .attach('photos', PNG, { filename: 'b.webp', contentType: 'image/webp' });
     expect(res.status).toBe(200);
@@ -553,7 +573,7 @@ describe('POST /api/portal/returns/:id/photos', () => {
 
   it('rejects more than 5 files (multer limit surfaces as an error, handler never runs)', async () => {
     prisma.return.findUnique.mockResolvedValue(fakeReturn());
-    let req = request(app).post('/api/portal/returns/ret_test_1/photos');
+    let req = request(app).post('/api/portal/returns/ret_test_1/photos').field('email', 'jane@example.com');
     for (let i = 0; i < 6; i++) {
       req = req.attach('photos', PNG, { filename: `p${i}.png`, contentType: 'image/png' });
     }
@@ -568,6 +588,7 @@ describe('POST /api/portal/returns/:id/photos', () => {
     const big = Buffer.alloc(5 * 1024 * 1024 + 1, 1);
     const res = await request(app)
       .post('/api/portal/returns/ret_test_1/photos')
+      .field('email', 'jane@example.com')
       .attach('photos', big, { filename: 'big.png', contentType: 'image/png' });
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(storage.uploadReturnPhoto).not.toHaveBeenCalled();
@@ -578,6 +599,7 @@ describe('POST /api/portal/returns/:id/photos', () => {
     storage.uploadReturnPhoto.mockRejectedValue(new Error('Storage not configured'));
     const res = await request(app)
       .post('/api/portal/returns/ret_test_1/photos')
+      .field('email', 'jane@example.com')
       .attach('photos', PNG, { filename: 'a.png', contentType: 'image/png' });
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: 'Upload failed' });
@@ -607,10 +629,36 @@ describe('POST /api/portal/returns/:id/photos/presign', () => {
     expect(res.body.error).toMatch(/max 5MB/);
   });
 
+  it('400 when contentLength is missing or not a whole number of bytes', async () => {
+    for (const contentLength of [undefined, '1000', 10.5, -1, 0]) {
+      const res = await request(app)
+        .post('/api/portal/returns/ret_test_1/photos/presign')
+        .send({ contentType: 'image/png', contentLength, email: 'jane@example.com' });
+      expect(res.status).toBe(400);
+    }
+    expect(storage.getPresignedUploadUrl).not.toHaveBeenCalled();
+  });
+
+  it('404 for an unknown return or a mismatched email — no upload URL is minted', async () => {
+    prisma.return.findUnique.mockResolvedValue(null);
+    let res = await request(app)
+      .post('/api/portal/returns/missing/photos/presign')
+      .send({ contentType: 'image/png', contentLength: 10, email: 'jane@example.com' });
+    expect(res.status).toBe(404);
+
+    prisma.return.findUnique.mockResolvedValue(fakeReturn());
+    res = await request(app)
+      .post('/api/portal/returns/ret_test_1/photos/presign')
+      .send({ contentType: 'image/png', contentLength: 10, email: 'intruder@example.com' });
+    expect(res.status).toBe(404);
+    expect(storage.getPresignedUploadUrl).not.toHaveBeenCalled();
+  });
+
   it('accepts exactly 5MB and returns the presigned payload scoped to the return id', async () => {
+    prisma.return.findUnique.mockResolvedValue(fakeReturn());
     const res = await request(app)
       .post('/api/portal/returns/ret_test_1/photos/presign')
-      .send({ contentType: 'image/jpeg', contentLength: 5 * 1024 * 1024 });
+      .send({ contentType: 'image/jpeg', contentLength: 5 * 1024 * 1024, email: 'jane@example.com' });
 
     expect(res.status).toBe(200);
     expect(storage.getPresignedUploadUrl).toHaveBeenCalledWith({
@@ -626,10 +674,11 @@ describe('POST /api/portal/returns/:id/photos/presign', () => {
   });
 
   it('500 when storage is not configured / presign fails', async () => {
+    prisma.return.findUnique.mockResolvedValue(fakeReturn());
     storage.getPresignedUploadUrl.mockRejectedValue(new Error('Storage not configured'));
     const res = await request(app)
       .post('/api/portal/returns/ret_test_1/photos/presign')
-      .send({ contentType: 'image/png', contentLength: 10 });
+      .send({ contentType: 'image/png', contentLength: 10, email: 'jane@example.com' });
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: 'Failed to generate upload URL' });
   });

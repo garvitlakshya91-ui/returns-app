@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useRef } from 'react';
 import { Camera, X, Upload } from 'lucide-react';
 
 export default function PhotoUploader({ photos = [], onChange, maxPhotos = 3 }) {

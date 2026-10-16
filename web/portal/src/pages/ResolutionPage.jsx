@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Banknote, CreditCard, RefreshCw } from 'lucide-react';
 import ProgressStepper from '../components/ProgressStepper';
+import { formatMoney } from '../money';
 
 const RESOLUTIONS = [
   {
@@ -13,7 +14,7 @@ const RESOLUTIONS = [
   {
     value: 'STORE_CREDIT',
     label: 'Store credit',
-    description: 'Get a gift card for the full value. Available instantly via email.',
+    description: 'Credit on your account with this store, ready to spend once your return is processed.',
     icon: CreditCard,
     badge: 'Fastest',
   },
@@ -30,9 +31,16 @@ export default function ResolutionPage({ data, update }) {
   const navigate = useNavigate();
   const [resolution, setResolution] = useState(data.resolution || null);
 
-  const totalValue = (data.selectedItems || []).reduce(
+  const selectedItems = data.selectedItems || [];
+  const totalValue = selectedItems.reduce(
     (sum, item) => sum + Number(item.price) * item.quantity, 0
   );
+
+  // Only offer what every selected item's policy allows (the server checks
+  // the same thing). Items from older lookups without a list allow all.
+  const allowed = RESOLUTIONS.filter((res) => selectedItems.every(
+    (item) => !Array.isArray(item.resolutions) || item.resolutions.includes(res.value),
+  ));
 
   function handleNext() {
     update({ resolution });
@@ -46,12 +54,15 @@ export default function ResolutionPage({ data, update }) {
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">How would you like to be refunded?</h1>
         <p className="text-gray-500 mt-1">
-          Return value: <span className="font-semibold text-gray-900">{'\u00A3'}{totalValue.toFixed(2)}</span>
+          Return value: <span className="font-semibold text-gray-900">{formatMoney(totalValue, data.order?.currency)}</span>
         </p>
       </div>
 
       <div className="space-y-3 mb-8">
-        {RESOLUTIONS.map((res) => {
+        {allowed.length === 0 && (
+          <p className="text-sm text-gray-500">No refund options are available for these items. Please contact the store.</p>
+        )}
+        {allowed.map((res) => {
           const Icon = res.icon;
           const isSelected = resolution === res.value;
 

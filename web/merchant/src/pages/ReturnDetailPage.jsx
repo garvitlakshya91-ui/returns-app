@@ -99,6 +99,21 @@ export default function ReturnDetailPage() {
     }
   }
 
+  async function handleGenerateLabel() {
+    setActionLoading('label');
+    try {
+      const label = await returnsApi.generateLabel(id);
+      const tracking = label?.trackingCode ? ` (tracking ${label.trackingCode})` : '';
+      setBanner({ title: `Label generated${tracking}. The customer has been emailed.`, tone: 'success' });
+      loadReturn();
+    } catch (err) {
+      setBanner({ title: `Label failed: ${err.message}`, tone: 'critical' });
+      loadReturn();
+    } finally {
+      setActionLoading('');
+    }
+  }
+
   async function handleProcess() {
     setActionLoading('process');
     try {
@@ -142,6 +157,9 @@ export default function ReturnDetailPage() {
   }
 
   const canApprove = ret.status === 'REQUESTED';
+  // Approved but no label: the label step failed (the reason is on the timeline).
+  const needsLabel = ret.status === 'APPROVED' && (!ret.label || ret.label.status === 'pending');
+  const lastLabelFailure = (ret.events || []).find((e) => e.type === 'label.failed')?.data?.error;
   const canProcess = ['RECEIVED', 'INSPECTING', 'APPROVED', 'LABEL_SENT', 'IN_TRANSIT'].includes(ret.status);
 
   return (
@@ -162,12 +180,23 @@ export default function ReturnDetailPage() {
         content: 'Reject',
         destructive: true,
         onAction: () => setRejectModalOpen(true),
+      }] : needsLabel ? [{
+        content: ret.label ? 'Retry label' : 'Generate label',
+        onAction: handleGenerateLabel,
+        loading: actionLoading === 'label',
       }] : []}
     >
       <Layout>
         {banner && (
           <Layout.Section>
             <Banner tone={banner.tone} title={banner.title} onDismiss={() => setBanner(null)} />
+          </Layout.Section>
+        )}
+        {needsLabel && !banner && (
+          <Layout.Section>
+            <Banner tone="warning" title="No label has been sent for this return">
+              <p>{lastLabelFailure || 'The label has not been generated yet.'} Fix the cause, then use "Generate label".</p>
+            </Banner>
           </Layout.Section>
         )}
 

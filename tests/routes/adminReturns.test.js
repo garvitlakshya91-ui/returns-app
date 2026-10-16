@@ -174,3 +174,55 @@ describe('POST /api/admin/returns/demo', () => {
     expect(spy).toHaveBeenCalledWith('return.created', expect.objectContaining({ shopId: 'shop_test_1' }));
   });
 });
+
+describe('PUT /api/admin/returns/:id/label — generate or retry the label', () => {
+  let LabelService;
+  let NotificationService;
+  beforeEach(() => {
+    LabelService = { generateLabel: jest.fn().mockResolvedValue({ id: 'lbl_1', trackingCode: 'TRK1', status: 'created' }) };
+    NotificationService = { sendLabelReady: jest.fn().mockResolvedValue({ sent: true }) };
+    jest.doMock('../../app/services/LabelService', () => LabelService);
+    jest.doMock('../../app/services/NotificationService', () => NotificationService);
+    prisma.returnEvent.create.mockResolvedValue({});
+  });
+
+  it('404 unless the return is approved and belongs to the shop', async () => {
+    prisma.return.findFirst.mockResolvedValue(null);
+    const res = await request(app).put('/api/admin/returns/r1/label');
+    expect(res.status).toBe(404);
+    expect(prisma.return.findFirst.mock.calls[0][0].where).toEqual({ id: 'r1', shopId: 'shop_test_1', status: { in: ['APPROVED', 'LABEL_SENT'] } });
+  });
+
+  it('generates the label, notes the retry on the timeline and emails the customer', async () => {
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'APPROVED', label: null }));
+    const withLabel = fakeReturn({ id: 'r1', status: 'LABEL_SENT', label: { id: 'lbl_1', trackingCode: 'TRK1' } });
+    prisma.return.findUnique.mockResolvedValue(withLabel);
+
+    const res = await request(app).put('/api/admin/returns/r1/label');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 'lbl_1', trackingCode: 'TRK1' });
+    expect(LabelService.generateLabel).toHaveBeenCalledWith('r1');
+    expect(prisma.returnEvent.create).toHaveBeenCalledWith({
+      data: { returnId: 'r1', type: 'label.generated', actor: 'merchant', data: { retry: true } },
+    });
+    expect(NotificationService.sendLabelReady).toHaveBeenCalledWith(withLabel, expect.objectContaining({ id: 'lbl_1' }));
+  });
+
+  it('returns the existing label without generating again', async () => {
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'LABEL_SENT', label: { id: 'lbl_old', status: 'created', trackingCode: 'OLD' } }));
+    const res = await request(app).put('/api/admin/returns/r1/label');
+    expect(res.status).toBe(200);
+    expect(res.body.trackingCode).toBe('OLD');
+    expect(LabelService.generateLabel).not.toHaveBeenCalled();
+  });
+
+  it('422 with the reason when the label cannot be made (merchant can fix and retry)', async () => {
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'APPROVED', label: null }));
+    LabelService.generateLabel.mockRejectedValue(new Error('No label was bought: add your returns address in Settings'));
+    const res = await request(app).put('/api/admin/returns/r1/label');
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/returns address/);
+    expect(NotificationService.sendLabelReady).not.toHaveBeenCalled();
+  });
+});

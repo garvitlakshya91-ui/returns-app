@@ -237,6 +237,40 @@ router.put('/:id/approve', async (req, res) => {
 });
 
 /**
+ * PUT /api/admin/returns/:id/label
+ * Generate (or retry) the label for an approved return whose label failed.
+ * Safe to call twice: LabelService holds a lock per return and returns an
+ * existing label instead of buying another.
+ */
+router.put('/:id/label', async (req, res) => {
+  try {
+    const returnRecord = await prisma.return.findFirst({
+      where: { id: req.params.id, shopId: req.shopId, status: { in: ['APPROVED', 'LABEL_SENT'] } },
+      include: { label: true },
+    });
+    if (!returnRecord) {
+      return res.status(404).json({ error: 'Return not found or not approved' });
+    }
+    if (returnRecord.label && returnRecord.label.status !== 'pending') {
+      return res.json(returnRecord.label);
+    }
+
+    const LabelService = require('../../services/LabelService');
+    const NotificationService = require('../../services/NotificationService');
+    const label = await LabelService.generateLabel(returnRecord.id);
+    await prisma.returnEvent.create({
+      data: { returnId: returnRecord.id, type: 'label.generated', actor: 'merchant', data: { retry: true } },
+    }).catch(() => {});
+    const fresh = await prisma.return.findUnique({ where: { id: returnRecord.id }, include: { label: true } });
+    if (fresh) await NotificationService.sendLabelReady(fresh, label);
+    res.json(label);
+  } catch (err) {
+    // The reason is already on the timeline (LABEL_FAILED); tell the merchant too.
+    res.status(422).json({ error: err.message || 'Label generation failed' });
+  }
+});
+
+/**
  * PUT /api/admin/returns/:id/reject
  * Reject a return with reason.
  */

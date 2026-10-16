@@ -171,6 +171,34 @@ router.post('/returns', createReturnLimiter, loadShopFromBody, planGate('createR
 });
 
 /**
+ * GET /api/portal/shops/:slug/branding
+ * What the merchant set under "Customise your portal", for the portal to
+ * show. Public, like the portal itself; nothing private is returned.
+ */
+router.get('/shops/:slug/branding', async (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').trim().toLowerCase().replace(/\.myshopify\.com$/, '');
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) return res.status(404).json({ error: 'Shop not found' });
+    const shop = await prisma.shop.findFirst({
+      where: { shopifyDomain: `${slug}.myshopify.com`, shopifyToken: { not: '' } },
+      select: { name: true, email: true, settings: true },
+    });
+    if (!shop) return res.status(404).json({ error: 'Shop not found' });
+    const s = shop.settings || {};
+    res.json({
+      name: shop.name,
+      heading: typeof s.portalHeading === 'string' && s.portalHeading.trim() ? s.portalHeading.trim().slice(0, 120) : null,
+      primaryColor: typeof s.primaryColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(s.primaryColor) ? s.primaryColor : null,
+      supportEmail: typeof s.supportEmail === 'string' && s.supportEmail.includes('@') ? s.supportEmail : null,
+      logoUrl: typeof s.logoUrl === 'string' && /^https:\/\//i.test(s.logoUrl) ? s.logoUrl : null,
+    });
+  } catch (err) {
+    logger.error({ err }, 'Branding lookup error');
+    res.status(500).json({ error: 'Failed to load branding' });
+  }
+});
+
+/**
  * POST /api/portal/quote
  * The return fee the shop's policy would charge for these reasons, so the
  * customer sees it before submitting. Reads nothing from Shopify.

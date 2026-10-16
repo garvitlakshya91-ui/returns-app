@@ -47,6 +47,7 @@ export const returnsApi = {
     body: JSON.stringify({ reason }),
   }),
   process: (id) => apiFetch(`/returns/${id}/process`, { method: 'PUT' }),
+  generateLabel: (id) => apiFetch(`/returns/${id}/label`, { method: 'PUT' }),
   bulk: (action, ids, reason) => apiFetch('/returns/bulk', {
     method: 'POST',
     body: JSON.stringify({ action, ids, reason }),

@@ -766,3 +766,39 @@ describe('router wiring', () => {
     expect(portalLimiter).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('GET /api/portal/shops/:slug/branding', () => {
+  it('returns only the merchant portal branding, validated', async () => {
+    prisma.shop.findFirst.mockResolvedValue(fakeShop({
+      name: 'Wildgrove & Co.',
+      settings: { portalHeading: '  Returns made easy  ', primaryColor: '#0B6E4F', supportEmail: 'help@wildgrove.co', logoUrl: 'https://cdn.wildgrove.co/logo.png', secret: 'x' },
+    }));
+    const res = await request(app).get('/api/portal/shops/Wildgrove.myshopify.com/branding');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      name: 'Wildgrove & Co.',
+      heading: 'Returns made easy',
+      primaryColor: '#0B6E4F',
+      supportEmail: 'help@wildgrove.co',
+      logoUrl: 'https://cdn.wildgrove.co/logo.png',
+    });
+    expect(prisma.shop.findFirst.mock.calls[0][0].where.shopifyDomain).toBe('wildgrove.myshopify.com');
+  });
+
+  it('drops values that are not a hex colour, an https url or an email', async () => {
+    prisma.shop.findFirst.mockResolvedValue(fakeShop({
+      settings: { primaryColor: 'red', logoUrl: 'javascript:alert(1)', supportEmail: 'nope', portalHeading: '' },
+    }));
+    const res = await request(app).get('/api/portal/shops/test-shop/branding');
+    expect(res.body).toEqual({ name: 'Test Shop', heading: null, primaryColor: null, supportEmail: null, logoUrl: null });
+  });
+
+  it('404 for a bad slug (no DB call) and for an unknown shop', async () => {
+    let res = await request(app).get('/api/portal/shops/..%2Fetc/branding');
+    expect(res.status).toBe(404);
+    expect(prisma.shop.findFirst).not.toHaveBeenCalled();
+    prisma.shop.findFirst.mockResolvedValue(null);
+    res = await request(app).get('/api/portal/shops/ghost/branding');
+    expect(res.status).toBe(404);
+  });
+});

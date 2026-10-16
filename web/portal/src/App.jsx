@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import LookupPage from './pages/LookupPage';
 import SelectItemsPage from './pages/SelectItemsPage';
 import ReturnReasonPage from './pages/ReturnReasonPage';
@@ -9,6 +9,7 @@ import ConfirmationPage from './pages/ConfirmationPage';
 import ReturnStatusPage from './pages/ReturnStatusPage';
 import PortalLayout from './components/PortalLayout';
 import { isDemo, DEMO_DATA } from './demoSeed';
+import { getBranding } from './api';
 
 const EMPTY_DATA = {
   shopId: null,
@@ -24,9 +25,38 @@ const EMPTY_DATA = {
   returnResult: null,
 };
 
+// Darken a #rrggbb colour a little for hover states.
+function darken(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const f = (v) => Math.max(0, Math.round(v * 0.85)).toString(16).padStart(2, '0');
+  return `#${f((n >> 16) & 255)}${f((n >> 8) & 255)}${f(n & 255)}`;
+}
+
+// The shop slug is the first path segment after the /portal base.
+function slugFromLocation() {
+  const seg = window.location.pathname.replace(/^\/portal\/?/, '').split('/')[0];
+  return seg && /^[a-z0-9][a-z0-9-]*$/i.test(seg) ? seg.toLowerCase() : '';
+}
+
 export default function App() {
   // Seed mock data only when ?demo=1 is present (screenshots/demos); never in prod.
   const [returnData, setReturnData] = useState(isDemo() ? DEMO_DATA : EMPTY_DATA);
+  const [branding, setBranding] = useState(null);
+
+  // What the merchant set under "Customise your portal": heading, colour,
+  // logo, support email. Loaded once for the shop in the URL.
+  useEffect(() => {
+    const slug = slugFromLocation();
+    if (!slug || isDemo()) return;
+    getBranding(slug).then((b) => {
+      setBranding(b);
+      if (b?.primaryColor) {
+        document.documentElement.style.setProperty('--color-primary', b.primaryColor);
+        document.documentElement.style.setProperty('--color-primary-hover', darken(b.primaryColor));
+      }
+      if (b?.name) setReturnData((prev) => ({ ...prev, shopName: prev.shopName || b.name }));
+    }).catch(() => {});
+  }, []);
 
   function updateReturnData(updates) {
     setReturnData((prev) => ({ ...prev, ...updates }));
@@ -37,11 +67,11 @@ export default function App() {
     // the router would try to match the full path including the prefix and never
     // hit any of the routes below.
     <BrowserRouter basename="/portal">
-      <PortalLayout shopName={returnData.shopName}>
+      <PortalLayout shopName={returnData.shopName} branding={branding}>
         <Routes>
           <Route
             path="/:shopSlug?"
-            element={<LookupPage data={returnData} update={updateReturnData} />}
+            element={<LookupPage data={returnData} update={updateReturnData} branding={branding} />}
           />
           <Route
             path="/:shopSlug/select-items"

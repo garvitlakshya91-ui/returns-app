@@ -41,12 +41,20 @@ h1, h2, h3 {
   .btn-primary {
     @apply inline-flex items-center justify-center gap-2 w-full py-3 px-4
            rounded-xl font-semibold text-white
-           bg-indigo-600 shadow-sm shadow-indigo-600/20
+           shadow-sm
            transition-all duration-200
-           hover:bg-indigo-700 hover:shadow-md hover:shadow-indigo-600/25
-           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2
+           hover:shadow-md
+           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
            disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none
            cursor-pointer;
+    /* The merchant's brand colour (set on :root by App when they chose one). */
+    background-color: var(--color-primary);
+  }
+  .btn-primary:hover:not(:disabled) {
+    background-color: var(--color-primary-hover);
+  }
+  .brand-bg {
+    background-color: var(--color-primary);
   }
 
   /* Secondary / back action — quiet, bordered */

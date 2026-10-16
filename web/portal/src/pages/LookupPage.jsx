@@ -4,7 +4,7 @@ import { Search, AlertCircle, Package } from 'lucide-react';
 import ProgressStepper from '../components/ProgressStepper';
 import { lookupOrder } from '../api';
 
-export default function LookupPage({ data, update }) {
+export default function LookupPage({ data, update, branding }) {
   const { shopSlug } = useParams();
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
@@ -44,10 +44,10 @@ export default function LookupPage({ data, update }) {
       <ProgressStepper currentStep={1} />
 
       <div className="text-center mb-7">
-        <div className="w-14 h-14 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 flex items-center justify-center shadow-md shadow-indigo-600/25">
+        <div className="w-14 h-14 mx-auto mb-4 rounded-2xl brand-bg flex items-center justify-center shadow-md">
           <Package className="w-7 h-7 text-white" />
         </div>
-        <h1 className="text-2xl font-bold text-gray-900">Start a return</h1>
+        <h1 className="text-2xl font-bold text-gray-900">{branding?.heading || 'Start a return'}</h1>
         <p className="text-gray-500 mt-1.5 max-w-xs mx-auto">
           Enter your email and order number to begin — it only takes a minute.
         </p>

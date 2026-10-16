@@ -12,6 +12,11 @@ async function apiFetch(path, options = {}) {
   return res.json();
 }
 
+// The merchant's portal branding (heading, colour, logo, support email).
+export function getBranding(shopSlug) {
+  return apiFetch(`/shops/${encodeURIComponent(shopSlug)}/branding`);
+}
+
 export function lookupOrder(email, orderNumber, shopSlug) {
   return apiFetch('/lookup', {
     method: 'POST',

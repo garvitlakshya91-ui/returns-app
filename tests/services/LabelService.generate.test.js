@@ -60,7 +60,11 @@ function installMocks() {
     toBuffer: jest.fn().mockResolvedValue(Buffer.from('fake-png')),
   };
   jest.doMock('qrcode', () => qrcode);
+  // The label row is the lock: create() writes the pending row, update() fills it in.
   prisma.returnLabel.create = jest.fn().mockImplementation(async ({ data }) => ({ id: 'lbl_new', ...data }));
+  prisma.returnLabel.update = jest.fn().mockImplementation(async ({ where, data }) => ({ id: where.id, returnId: 'ret_lbl_1', ...data }));
+  prisma.returnLabel.delete = jest.fn().mockResolvedValue({});
+  prisma.returnEvent.create = jest.fn().mockResolvedValue({});
   prisma.return.update = jest.fn().mockResolvedValue({});
 
   shopifyRequest = jest.fn().mockResolvedValue(shopifyAddressResponse);
@@ -140,13 +144,18 @@ describe('LabelService.generateLabel — happy path (Evri mock adapter, no R2)',
 
     expect(prisma.return.findUnique).toHaveBeenCalledWith({
       where: { id: 'ret_lbl_1' },
-      include: { shop: { include: { carrierConfigs: true } }, items: true },
+      include: { shop: { include: { carrierConfigs: true } }, items: true, label: true },
     });
 
-    expect(prisma.returnLabel.create).toHaveBeenCalledTimes(1);
-    const data = prisma.returnLabel.create.mock.calls[0][0].data;
+    // The pending row (the lock) is written before the carrier is called…
+    expect(prisma.returnLabel.create).toHaveBeenCalledWith({
+      data: { returnId: 'ret_lbl_1', carrier: 'evri', status: 'pending' },
+    });
+    // …and filled in once the label exists.
+    expect(prisma.returnLabel.update).toHaveBeenCalledTimes(1);
+    expect(prisma.returnLabel.update.mock.calls[0][0].where).toEqual({ id: 'lbl_new' });
+    const data = prisma.returnLabel.update.mock.calls[0][0].data;
     expect(data).toMatchObject({
-      returnId: 'ret_lbl_1',
       carrier: 'evri',
       dropoffType: 'ParcelShop',
       cost: 3.49,
@@ -154,17 +163,12 @@ describe('LabelService.generateLabel — happy path (Evri mock adapter, no R2)',
       labelUrl: null,
     });
     expect(data.trackingCode).toMatch(/^EVR[0-9A-F]+$/);
-    // No R2 → QR is an inline data URL encoding tracking + carrier + return + shop
-    expect(data.qrCodeUrl).toMatch(/^data:image\/png;base64,/);
-    expect(qrcode.toDataURL).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(qrcode.toDataURL.mock.calls[0][0])).toEqual({
-      tracking: data.trackingCode,
-      carrier: 'evri',
-      returnId: 'ret_lbl_1',
-      shop: 'test-shop.myshopify.com',
-    });
+    // No carrier QR → none stored; we never make our own.
+    expect(data.qrCodeUrl).toBeNull();
+    expect(qrcode.toDataURL).not.toHaveBeenCalled();
     expect(qrcode.toBuffer).not.toHaveBeenCalled();
     expect(storage.upload).not.toHaveBeenCalled();
+    expect(prisma.returnLabel.delete).not.toHaveBeenCalled();
 
     expect(prisma.return.update).toHaveBeenCalledWith({
       where: { id: 'ret_lbl_1' },
@@ -242,7 +246,7 @@ describe('LabelService.generateLabel — addresses + weight handed to the adapte
     });
     expect(args.weight).toBe(1.5);
     expect(args.dimensions).toEqual({ length: 30, width: 20, height: 10 });
-    expect(prisma.returnLabel.create.mock.calls[0][0].data.carrier).toBe('royalmail');
+    expect(prisma.returnLabel.update.mock.calls[0][0].data.carrier).toBe('royalmail');
   });
 
   it('merchant warehouse settings override the Shopify store address for the recipient', async () => {
@@ -328,20 +332,81 @@ describe('LabelService.generateLabel — failure path', () => {
 
     expect(failed).toHaveBeenCalledWith({ returnId: 'ret_lbl_1', error: 'InPost API 503' });
     expect(generated).not.toHaveBeenCalled();
-    expect(prisma.returnLabel.create).not.toHaveBeenCalled();
+    // The lock was taken, then released so the merchant can retry.
+    expect(prisma.returnLabel.create).toHaveBeenCalledTimes(1);
+    expect(prisma.returnLabel.delete).toHaveBeenCalledWith({ where: { id: 'lbl_new' } });
+    expect(prisma.returnLabel.update).not.toHaveBeenCalled();
     expect(prisma.return.update).not.toHaveBeenCalled();
     expect(billing.recordLabelCharge).not.toHaveBeenCalled();
   });
 
-  it('a DB failure on returnLabel.create also surfaces as LABEL_FAILED + rethrow (status not advanced)', async () => {
-    primeReturn();
-    prisma.returnLabel.create.mockRejectedValue(new Error('unique constraint returnId'));
+  it('a second call while a label is being generated buys nothing (unique lock row)', async () => {
+    const buy = jest.fn();
+    jest.doMock('../../app/services/carriers/InPostAdapter', () => class {
+      get carrierName() { return 'inpost'; }
+
+      async generateLabel(...a) { return buy(...a); }
+    });
+    primeReturn({ shop: shopWith([{ carrier: 'inpost', isActive: true, credentials: {}, settings: {} }]) });
+    const clash = new Error('Unique constraint failed on the fields: (`returnId`)');
+    clash.code = 'P2002';
+    prisma.returnLabel.create.mockRejectedValue(clash);
     load();
     const failed = jest.fn();
     eventBus.on(LABEL_FAILED, failed);
 
-    await expect(LabelService.generateLabel('ret_lbl_1')).rejects.toThrow('unique constraint returnId');
-    expect(failed).toHaveBeenCalledWith({ returnId: 'ret_lbl_1', error: 'unique constraint returnId' });
+    await expect(LabelService.generateLabel('ret_lbl_1')).rejects.toThrow('already being generated');
+    expect(buy).not.toHaveBeenCalled();
+    expect(failed).not.toHaveBeenCalled();
+    expect(prisma.returnLabel.delete).not.toHaveBeenCalled();
+  });
+
+  it('returns the existing label without buying again when the return already has one', async () => {
+    const buy = jest.fn();
+    jest.doMock('../../app/services/carriers/InPostAdapter', () => class {
+      get carrierName() { return 'inpost'; }
+
+      async generateLabel(...a) { return buy(...a); }
+    });
+    const existing = { id: 'lbl_old', returnId: 'ret_lbl_1', carrier: 'inpost', trackingCode: 'IP1', status: 'created' };
+    primeReturn({ label: existing, shop: shopWith([{ carrier: 'inpost', isActive: true, credentials: {}, settings: {} }]) });
+    load();
+
+    const label = await LabelService.generateLabel('ret_lbl_1');
+    expect(label).toBe(existing);
+    expect(buy).not.toHaveBeenCalled();
+    expect(prisma.returnLabel.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses while another attempt still holds the pending row', async () => {
+    primeReturn({ label: { id: 'lbl_p', returnId: 'ret_lbl_1', carrier: 'evri', status: 'pending' } });
+    load();
+    await expect(LabelService.generateLabel('ret_lbl_1')).rejects.toThrow('already being generated');
+    expect(prisma.returnLabel.create).not.toHaveBeenCalled();
+  });
+
+  it('a DB failure writing the lock row surfaces as LABEL_FAILED + rethrow (nothing bought)', async () => {
+    primeReturn();
+    prisma.returnLabel.create.mockRejectedValue(new Error('connection lost'));
+    load();
+    const failed = jest.fn();
+    eventBus.on(LABEL_FAILED, failed);
+
+    await expect(LabelService.generateLabel('ret_lbl_1')).rejects.toThrow('connection lost');
+    expect(failed).toHaveBeenCalledWith({ returnId: 'ret_lbl_1', error: 'connection lost' });
+    expect(prisma.return.update).not.toHaveBeenCalled();
+  });
+
+  it('a DB failure filling in the label releases the lock and reports LABEL_FAILED', async () => {
+    primeReturn();
+    prisma.returnLabel.update.mockRejectedValue(new Error('db down'));
+    load();
+    const failed = jest.fn();
+    eventBus.on(LABEL_FAILED, failed);
+
+    await expect(LabelService.generateLabel('ret_lbl_1')).rejects.toThrow('db down');
+    expect(failed).toHaveBeenCalledWith({ returnId: 'ret_lbl_1', error: 'db down' });
+    expect(prisma.returnLabel.delete).toHaveBeenCalledWith({ where: { id: 'lbl_new' } });
     expect(prisma.return.update).not.toHaveBeenCalled();
   });
 });
@@ -354,23 +419,21 @@ describe('LabelService.generateLabel — R2 hosting of QR + label PDF', () => {
     async generateLabel() { return result; }
   };
 
-  it('uploads the QR PNG to R2 and stores its public URL when R2_ACCOUNT_ID is set', async () => {
+  it('keeps the QR code the carrier issued and never generates its own', async () => {
     process.env.R2_ACCOUNT_ID = 'acct';
     process.env.R2_PUBLIC_URL = 'https://cdn.test';
-    primeReturn();
+    jest.doMock('../../app/services/carriers/RoyalMailAdapter', () => fakeAdapter({
+      trackingCode: 'RM1', labelUrl: null, qrCodeUrl: 'https://carrier.example/qr/RM1.png', cost: 2.75,
+    }));
+    primeReturn({ shop: shopWith([{ carrier: 'royalmail', isActive: true, credentials: {}, settings: {} }]) });
     load();
 
     await LabelService.generateLabel('ret_lbl_1');
 
-    expect(qrcode.toBuffer).toHaveBeenCalledTimes(1);
+    expect(prisma.returnLabel.update.mock.calls[0][0].data.qrCodeUrl).toBe('https://carrier.example/qr/RM1.png');
+    expect(qrcode.toBuffer).not.toHaveBeenCalled();
     expect(qrcode.toDataURL).not.toHaveBeenCalled();
-    expect(storage.upload).toHaveBeenCalledTimes(1);
-    const [buffer, contentType, keyPrefix] = storage.upload.mock.calls[0];
-    expect(Buffer.isBuffer(buffer)).toBe(true);
-    expect(buffer.toString()).toBe('fake-png');
-    expect(contentType).toBe('image/png');
-    expect(keyPrefix).toBe('returns/ret_lbl_1/qr');
-    expect(prisma.returnLabel.create.mock.calls[0][0].data.qrCodeUrl).toBe('https://cdn.test/returns/x/qr/1.png');
+    expect(storage.upload).not.toHaveBeenCalled();
   });
 
   it('re-hosts a carrier label PDF on R2 (fetch → uploadLabel) and stores the R2 URL', async () => {
@@ -392,7 +455,7 @@ describe('LabelService.generateLabel — R2 hosting of QR + label PDF', () => {
     expect(Buffer.isBuffer(buf)).toBe(true);
     expect(buf.toString('latin1')).toBe('%PDF');
     expect(returnId).toBe('ret_lbl_1');
-    expect(prisma.returnLabel.create.mock.calls[0][0].data.labelUrl).toBe('https://cdn.test/returns/x/labels/1.pdf');
+    expect(prisma.returnLabel.update.mock.calls[0][0].data.labelUrl).toBe('https://cdn.test/returns/x/labels/1.pdf');
   });
 
   it('keeps the carrier URL when the PDF fetch is not ok', async () => {
@@ -408,7 +471,7 @@ describe('LabelService.generateLabel — R2 hosting of QR + label PDF', () => {
     await LabelService.generateLabel('ret_lbl_1');
 
     expect(storage.uploadLabel).not.toHaveBeenCalled();
-    expect(prisma.returnLabel.create.mock.calls[0][0].data.labelUrl).toBe('https://carrier.example/label.pdf');
+    expect(prisma.returnLabel.update.mock.calls[0][0].data.labelUrl).toBe('https://carrier.example/label.pdf');
   });
 
   it('falls back gracefully to the carrier URL when the re-host throws (fetch error or upload error)', async () => {
@@ -458,7 +521,7 @@ describe('LabelService.generateLabel — R2 hosting of QR + label PDF', () => {
     expect(global.fetch).not.toHaveBeenCalled();
     expect(storage.upload).not.toHaveBeenCalled();
     expect(storage.uploadLabel).not.toHaveBeenCalled();
-    expect(prisma.returnLabel.create.mock.calls[0][0].data.labelUrl).toBe('https://carrier.example/label.pdf');
+    expect(prisma.returnLabel.update.mock.calls[0][0].data.labelUrl).toBe('https://carrier.example/label.pdf');
   });
 });
 
@@ -489,6 +552,13 @@ describe('LabelService.generateLabel — managed-platform billing', () => {
     expect(shopArg.shopifyDomain).toBe('test-shop.myshopify.com');
     expect(charge.amount).toBeCloseTo(4.7, 2); // 4.2 + 0.5 fee
     expect(charge.description).toBe('Return label royalmail #1042');
+    // The charge is on the return's timeline with Shopify's usage record id.
+    expect(prisma.returnEvent.create).toHaveBeenCalledWith({
+      data: {
+        returnId: 'ret_lbl_1', type: 'label.charged', actor: 'system',
+        data: { charged: true, amount: 4.7, postage: 4.2, usageRecordId: 'gid://shopify/AppUsageRecord/1', error: null },
+      },
+    });
   });
 
   it('also bills for a platform ShipEngine label', async () => {
@@ -580,6 +650,27 @@ describe('LabelService.generateLabel — managed-platform billing', () => {
       expect.objectContaining({ err: 'billing exploded', returnId: 'ret_lbl_1' }),
       expect.stringMatching(/billing failed/i),
     );
+    // …but the unrecovered postage is on record, not silently absorbed.
+    expect(prisma.returnEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        type: 'label.charge_failed',
+        data: expect.objectContaining({ charged: false, amount: 4.7, postage: 4.2, usageRecordId: null, error: 'billing exploded' }),
+      }),
+    });
+  });
+
+  it('a charge Shopify quietly skips (no usage line item) is recorded as unrecovered', async () => {
+    jest.doMock('../../app/services/carriers/ShippoAdapter', liveShippo);
+    billing.recordLabelCharge.mockResolvedValue(null);
+    primeReturn({ shop: shopWith([{ carrier: 'shippo', isActive: true, credentials: {}, settings: {} }]) });
+    load();
+
+    await LabelService.generateLabel('ret_lbl_1');
+
+    expect(prisma.returnEvent.create.mock.calls[0][0].data).toMatchObject({
+      type: 'label.charge_failed',
+      data: { charged: false, usageRecordId: null, error: expect.stringMatching(/No usage line item/) },
+    });
   });
 });
 
@@ -738,8 +829,7 @@ describe('LabelService.generateLabel — live labels need real addresses and rec
 
     await LabelService.generateLabel('ret_lbl_1');
 
-    expect(prisma.returnLabel.create.mock.calls[0][0].data.carrier).toBe('evri');
-    expect(JSON.parse(qrcode.toDataURL.mock.calls[0][0]).carrier).toBe('evri');
+    expect(prisma.returnLabel.update.mock.calls[0][0].data.carrier).toBe('evri');
     expect(billing.recordLabelCharge.mock.calls[0][1].description).toBe('Return label evri #1013');
   });
 
@@ -750,6 +840,6 @@ describe('LabelService.generateLabel — live labels need real addresses and rec
     load();
 
     await LabelService.generateLabel('ret_lbl_1');
-    expect(prisma.returnLabel.create.mock.calls[0][0].data.carrier).toBe('royalmail');
+    expect(prisma.returnLabel.update.mock.calls[0][0].data.carrier).toBe('royalmail');
   });
 });

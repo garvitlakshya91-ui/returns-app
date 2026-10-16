@@ -163,7 +163,7 @@ describe('POST /api/portal/returns', () => {
   });
 
   it('403 when shop has hit the monthly limit', async () => {
-    prisma.shop.findUnique.mockResolvedValue(fakeShop({ plan: 'FREE', returnCount: 30 }));
+    prisma.shop.findUnique.mockResolvedValue(fakeShop({ plan: 'FREE', returnCount: 30, billingCycleStart: new Date() }));
     const res = await request(app)
       .post('/api/portal/returns')
       .send({ shopId: 'shop_test_1', items: [{ quantity: 1, unitPrice: 10 }], resolution: 'REFUND' });

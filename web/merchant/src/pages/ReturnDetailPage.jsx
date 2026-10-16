@@ -96,8 +96,19 @@ export default function ReturnDetailPage() {
   async function handleProcess() {
     setActionLoading('process');
     try {
-      await returnsApi.process(id);
-      setBanner({ title: 'Refund processed successfully', tone: 'success' });
+      const result = await returnsApi.process(id);
+      // Say what Shopify actually did, not what was asked for.
+      const money = (n) => new Intl.NumberFormat('en-GB', { style: 'currency', currency: ret?.currency || 'GBP' }).format(Number(n || 0));
+      const what = result?.type === 'STORE_CREDIT'
+        ? `${money(result.amount)} issued as store credit`
+        : result?.type === 'EXCHANGE'
+          ? 'Exchange order created'
+          : `${money(result.amount)} refunded to the original payment`;
+      const shortfall = result?.requestedAmount != null && Number(result.amount) < Number(result.requestedAmount)
+        ? ` (Shopify allowed less than the ${money(result.requestedAmount)} expected)`
+        : '';
+      const note = result?.reconciled ? ' — matched to a refund Shopify already had' : '';
+      setBanner({ title: `${what}${shortfall}${note}`, tone: 'success' });
       loadReturn();
     } catch (err) {
       setBanner({ title: `Processing failed: ${err.message}`, tone: 'critical' });

@@ -1,5 +1,24 @@
 const prisma = require('../config/database');
 
+// Monthly quotas run on a 30-day cycle from billingCycleStart (set when a
+// paid plan activates). A shop with no start, or one whose cycle has ended,
+// starts a fresh cycle before its count is checked.
+const CYCLE_MS = 30 * 24 * 60 * 60 * 1000;
+
+function cycleExpired(shop) {
+  return !shop.billingCycleStart || (Date.now() - new Date(shop.billingCycleStart).getTime()) >= CYCLE_MS;
+}
+
+/** Reset the shop's monthly count when its cycle has ended. Returns the shop to use. */
+async function rollCycle(shop) {
+  if (!cycleExpired(shop)) return shop;
+  const fresh = await prisma.shop.update({
+    where: { id: shop.id },
+    data: { returnCount: 0, billingCycleStart: new Date() },
+  });
+  return fresh || { ...shop, returnCount: 0, billingCycleStart: new Date() };
+}
+
 const PLAN_LIMITS = {
   FREE: { returnsPerMonth: 30, carriers: 1, exchanges: false, analytics: false },
   STARTER: { returnsPerMonth: 150, carriers: 3, exchanges: true, analytics: false },
@@ -34,14 +53,26 @@ async function loadShopFromBody(req, res, next) {
  * Usage: router.post('/returns', planGate('createReturn'), handler)
  */
 function planGate(feature) {
-  return (req, res, next) => {
-    const shop = req.shop;
+  return async (req, res, next) => {
+    let shop = req.shop;
     if (!shop) {
       return res.status(401).json({ error: 'Shop not authenticated' });
     }
 
     const limits = PLAN_LIMITS[shop.plan] || PLAN_LIMITS.FREE;
 
+    if (feature === 'createReturn' && Number.isFinite(limits.returnsPerMonth)) {
+      try {
+        shop = await rollCycle(shop);
+        req.shop = shop;
+      } catch (err) {
+        return res.status(500).json({ error: 'Failed to check plan usage' });
+      }
+    }
+
+    // Fast path. The count that actually enforces the limit is the atomic
+    // reservation in ReturnService.createReturn, so two requests arriving
+    // together cannot both slip under it.
     if (feature === 'createReturn' && shop.returnCount >= limits.returnsPerMonth) {
       return res.status(403).json({
         error: 'Monthly return limit reached',
@@ -72,4 +103,4 @@ function planGate(feature) {
   };
 }
 
-module.exports = { planGate, loadShopFromBody, PLAN_LIMITS };
+module.exports = { planGate, loadShopFromBody, rollCycle, cycleExpired, PLAN_LIMITS, CYCLE_MS };

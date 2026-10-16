@@ -1,4 +1,3 @@
-const QRCode = require('qrcode');
 const prisma = require('../config/database');
 const eventBus = require('../events/eventBus');
 const { LABEL_GENERATED, LABEL_FAILED } = require('../events/emitters');
@@ -35,10 +34,18 @@ class LabelService {
       include: {
         shop: { include: { carrierConfigs: true } },
         items: true,
+        label: true,
       },
     });
 
     if (!returnRecord) throw new Error(`Return ${returnId} not found`);
+
+    // One label per return. A finished label is simply returned; a label
+    // another attempt is still buying is left alone. The ReturnLabel row is
+    // the lock: it is written BEFORE postage is bought, and its unique
+    // returnId means a second concurrent call cannot get past this point.
+    if (returnRecord.label && returnRecord.label.status !== 'pending') return returnRecord.label;
+    if (returnRecord.label) throw new Error('A label for this return is already being generated');
 
     const shop = returnRecord.shop;
     const adapter = LabelService.getCarrierAdapter(shop);
@@ -81,6 +88,19 @@ class LabelService {
 
     const weight = returnRecord.items.reduce((sum, item) => sum + item.quantity * 0.5, 0);
 
+    // Take the lock. If another call got here first the unique constraint
+    // fires and nothing is bought twice.
+    let pendingLabel;
+    try {
+      pendingLabel = await prisma.returnLabel.create({
+        data: { returnId, carrier: adapter.carrierName, status: 'pending' },
+      });
+    } catch (err) {
+      if (err.code === 'P2002') throw new Error('A label for this return is already being generated');
+      eventBus.emit(LABEL_FAILED, { returnId, error: err.message });
+      throw err;
+    }
+
     try {
       const labelResult = await adapter.generateLabel({
         senderAddress,
@@ -92,36 +112,10 @@ class LabelService {
       // emails and the dashboard send the customer to the right drop-off.
       const carrier = normaliseCarrier(labelResult.carrier) || adapter.carrierName;
 
-      // Generate QR code. We render as a PNG buffer and upload to R2 so the
-      // QR shows up in email clients — Gmail/Outlook strip data: URL images.
-      // If R2 isn't configured, fall back to a data URL (works in the
-      // merchant admin embed and in browsers, just not in most email clients).
-      const qrData = JSON.stringify({
-        tracking: labelResult.trackingCode,
-        carrier,
-        returnId,
-        shop: shop.shopifyDomain,
-      });
-      let qrCodeUrl;
-      if (process.env.R2_ACCOUNT_ID) {
-        const buffer = await QRCode.toBuffer(qrData, {
-          width: 300,
-          margin: 2,
-          color: { dark: '#000000', light: '#ffffff' },
-        });
-        const { url } = await StorageService.upload(
-          buffer,
-          'image/png',
-          `returns/${returnId}/qr`,
-        );
-        qrCodeUrl = url;
-      } else {
-        qrCodeUrl = await QRCode.toDataURL(qrData, {
-          width: 300,
-          margin: 2,
-          color: { dark: '#000000', light: '#ffffff' },
-        });
-      }
+      // Only a QR code the carrier issued is any use at a drop-off point.
+      // When the carrier gives none, the customer prints the label instead;
+      // a home-made QR would only be scanned and refused.
+      const qrCodeUrl = labelResult.qrCodeUrl || null;
 
       // If carrier returned a label URL, re-host on R2 for reliability
       let labelUrl = labelResult.labelUrl;
@@ -138,9 +132,9 @@ class LabelService {
         }
       }
 
-      const label = await prisma.returnLabel.create({
+      const label = await prisma.returnLabel.update({
+        where: { id: pendingLabel.id },
         data: {
-          returnId,
           carrier,
           trackingCode: labelResult.trackingCode,
           labelUrl,
@@ -163,24 +157,50 @@ class LabelService {
       // LABEL_FAILED (which would also suppress the customer's label email).
       if (isManagedPlatform && !labelResult.simulated && Number(labelResult.cost) > 0
         && !managedBilling?.devStore) {
+        const BillingService = require('./BillingService');
+        const charge = Math.round((Number(labelResult.cost) + BillingService.LABEL_FEE_GBP) * 100) / 100;
+        let usageRecordId = null;
+        let chargeError = null;
         try {
-          const BillingService = require('./BillingService');
-          const charge = Math.round((Number(labelResult.cost) + BillingService.LABEL_FEE_GBP) * 100) / 100;
-          await BillingService.recordLabelCharge(shop, {
+          usageRecordId = await BillingService.recordLabelCharge(shop, {
             amount: charge,
             description: `Return label ${carrier} ${returnRecord.shopifyOrderName}`,
           });
         } catch (billingErr) {
+          chargeError = billingErr.message;
           logger.warn({ err: billingErr.message, returnId }, 'Managed-label billing failed after label creation (non-fatal)');
         }
+        // Ledger entry on the return's timeline: every managed label's
+        // postage is either charged (with Shopify's usage record id) or
+        // recorded as unrecovered, so nothing is silently absorbed.
+        await LabelService._recordCharge(returnId, {
+          charged: Boolean(usageRecordId),
+          amount: charge,
+          postage: Number(labelResult.cost),
+          usageRecordId,
+          error: chargeError || (usageRecordId ? null : 'No usage line item or Shopify refused the charge'),
+        });
       }
 
       eventBus.emit(LABEL_GENERATED, { returnId, labelId: label.id });
       return label;
     } catch (err) {
+      // Release the lock so the merchant can retry after fixing the cause.
+      await prisma.returnLabel.delete({ where: { id: pendingLabel.id } })
+        .catch((delErr) => logger.error({ returnId, err: delErr.message }, 'Could not release label lock'));
       logger.error({ err, returnId }, 'Label generation failed');
       eventBus.emit(LABEL_FAILED, { returnId, error: err.message });
       throw err;
+    }
+  }
+
+  static async _recordCharge(returnId, data) {
+    try {
+      await prisma.returnEvent.create({
+        data: { returnId, type: data.charged ? 'label.charged' : 'label.charge_failed', actor: 'system', data },
+      });
+    } catch (err) {
+      logger.error({ returnId, err: err.message }, 'Could not record managed-label charge');
     }
   }
 

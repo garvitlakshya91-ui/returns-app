@@ -1,4 +1,4 @@
-const { installPrismaMock, fakeReturn, fakeReturnItem } = require('../helpers');
+const { installPrismaMock, fakeShop, fakeReturn, fakeReturnItem } = require('../helpers');
 
 let prisma;
 let ReturnService;
@@ -10,6 +10,9 @@ beforeEach(() => {
   prisma = installPrismaMock();
   ReturnService = require('../../app/services/ReturnService');
   eventBus = require('../../app/events/eventBus');
+  // A FREE shop with room in its quota; the reservation succeeds.
+  prisma.shop.findUnique.mockResolvedValue(fakeShop({ plan: 'FREE', returnCount: 3 }));
+  prisma.shop.updateMany.mockResolvedValue({ count: 1 });
 });
 
 describe('ReturnService.createReturn', () => {
@@ -79,24 +82,55 @@ describe('ReturnService.createReturn', () => {
     expect(prisma.return.create.mock.calls[0][0].data.returnFee).toBe(0);
   });
 
-  it('increments the shop returnCount', async () => {
+  const minimal = () => ({
+    shopId: 'shop_test_1',
+    shopifyOrderId: 'o1',
+    shopifyOrderName: '#1',
+    customerEmail: 'e@x.com',
+    customerName: 'E',
+    items: [{ lineItemId: 'li', productTitle: 'X', quantity: 1, unitPrice: 10, reason: 'other' }],
+    resolution: 'REFUND',
+  });
+
+  it('reserves a quota slot atomically — only while the count is under the plan limit', async () => {
     prisma.return.create.mockResolvedValue(fakeReturn());
-    prisma.shop.update.mockResolvedValue({});
 
-    await ReturnService.createReturn({
-      shopId: 'shop_test_1',
-      shopifyOrderId: 'o1',
-      shopifyOrderName: '#1',
-      customerEmail: 'e@x.com',
-      customerName: 'E',
-      items: [{ lineItemId: 'li', productTitle: 'X', quantity: 1, unitPrice: 10, reason: 'other' }],
-      resolution: 'REFUND',
-    });
+    await ReturnService.createReturn(minimal());
 
-    expect(prisma.shop.update).toHaveBeenCalledWith({
-      where: { id: 'shop_test_1' },
+    expect(prisma.shop.updateMany).toHaveBeenCalledWith({
+      where: { id: 'shop_test_1', returnCount: { lt: 30 } },
       data: { returnCount: { increment: 1 } },
     });
+    // The reservation happens before the return row is written.
+    expect(prisma.shop.updateMany.mock.invocationCallOrder[0]).toBeLessThan(prisma.return.create.mock.invocationCallOrder[0]);
+  });
+
+  it('throws QUOTA_EXCEEDED and writes nothing when the slot cannot be reserved', async () => {
+    prisma.shop.updateMany.mockResolvedValue({ count: 0 });
+    await expect(ReturnService.createReturn(minimal())).rejects.toMatchObject({ code: 'QUOTA_EXCEEDED', limit: 30, plan: 'FREE' });
+    expect(prisma.return.create).not.toHaveBeenCalled();
+  });
+
+  it('does not cap unlimited plans', async () => {
+    prisma.shop.findUnique.mockResolvedValue(fakeShop({ plan: 'GROWTH', returnCount: 5000 }));
+    prisma.return.create.mockResolvedValue(fakeReturn());
+    await ReturnService.createReturn(minimal());
+    expect(prisma.shop.updateMany.mock.calls[0][0].where).toEqual({ id: 'shop_test_1' });
+  });
+
+  it('gives the slot back when saving the return fails', async () => {
+    prisma.return.create.mockRejectedValue(new Error('db down'));
+    await expect(ReturnService.createReturn(minimal())).rejects.toThrow('db down');
+    expect(prisma.shop.updateMany).toHaveBeenLastCalledWith({
+      where: { id: 'shop_test_1', returnCount: { gt: 0 } },
+      data: { returnCount: { decrement: 1 } },
+    });
+  });
+
+  it('stores the order currency when given', async () => {
+    prisma.return.create.mockResolvedValue(fakeReturn());
+    await ReturnService.createReturn({ ...minimal(), currency: 'USD' });
+    expect(prisma.return.create.mock.calls[0][0].data.currency).toBe('USD');
   });
 
   it('emits RETURN_CREATED with returnId and shopId', async () => {

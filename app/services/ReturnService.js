@@ -2,6 +2,16 @@ const prisma = require('../config/database');
 const eventBus = require('../events/eventBus');
 const { RETURN_CREATED } = require('../events/emitters');
 const { computeReturnFee } = require('../utils/fees');
+const { PLAN_LIMITS } = require('../middleware/planGating');
+
+class QuotaExceededError extends Error {
+  constructor(limit, plan) {
+    super('Monthly return limit reached');
+    this.code = 'QUOTA_EXCEEDED';
+    this.limit = limit;
+    this.plan = plan;
+  }
+}
 
 class ReturnService {
   /**
@@ -26,7 +36,21 @@ class ReturnService {
 
     const returnFee = await ReturnService.quoteFee(shopId, items);
 
-    const returnRecord = await prisma.return.create({
+    // Reserve a slot in the monthly quota atomically: the increment only
+    // happens while the count is still under the limit, so concurrent
+    // requests cannot both get in on the last slot.
+    const shop = await prisma.shop.findUnique({ where: { id: shopId } });
+    if (!shop) throw new Error(`Shop ${shopId} not found`);
+    const limit = (PLAN_LIMITS[shop.plan] || PLAN_LIMITS.FREE).returnsPerMonth;
+    const reserved = await prisma.shop.updateMany({
+      where: { id: shopId, ...(Number.isFinite(limit) ? { returnCount: { lt: limit } } : {}) },
+      data: { returnCount: { increment: 1 } },
+    });
+    if (reserved.count === 0) throw new QuotaExceededError(limit, shop.plan);
+
+    let returnRecord;
+    try {
+      returnRecord = await prisma.return.create({
       data: {
         shopId,
         shopifyOrderId,
@@ -57,12 +81,14 @@ class ReturnService {
       },
       include: { items: true },
     });
-
-    // Increment shop return count
-    await prisma.shop.update({
-      where: { id: shopId },
-      data: { returnCount: { increment: 1 } },
-    });
+    } catch (err) {
+      // Give the slot back if the return itself could not be saved.
+      await prisma.shop.updateMany({
+        where: { id: shopId, returnCount: { gt: 0 } },
+        data: { returnCount: { decrement: 1 } },
+      }).catch(() => {});
+      throw err;
+    }
 
     eventBus.emit(RETURN_CREATED, { returnId: returnRecord.id, shopId });
 
@@ -100,5 +126,7 @@ class ReturnService {
     return { returns, total, page, limit };
   }
 }
+
+ReturnService.QuotaExceededError = QuotaExceededError;
 
 module.exports = ReturnService;

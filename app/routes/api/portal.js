@@ -162,6 +162,9 @@ router.post('/returns', createReturnLimiter, loadShopFromBody, planGate('createR
     if (err instanceof ReturnValidation.ValidationError) {
       return res.status(err.status).json({ error: err.message });
     }
+    if (err.code === 'QUOTA_EXCEEDED') {
+      return res.status(403).json({ error: err.message, limit: err.limit, plan: err.plan, upgradeRequired: true });
+    }
     logger.error({ err }, 'Create return error');
     res.status(500).json({ error: 'Failed to create return' });
   }

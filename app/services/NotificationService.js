@@ -124,7 +124,7 @@ class NotificationService {
   static async sendRefundProcessed(returnRecord) {
     const resolutionText = {
       REFUND: 'refunded to your original payment method',
-      STORE_CREDIT: 'issued as store credit (gift card sent to your email)',
+      STORE_CREDIT: 'issued as store credit on your account with the store',
       EXCHANGE: 'processed as an exchange',
     }[returnRecord.resolution] || 'processed';
 

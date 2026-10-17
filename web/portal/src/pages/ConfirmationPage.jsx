@@ -45,7 +45,7 @@ export default function ConfirmationPage({ data }) {
   // Show the fee (and what the refund will be) before the customer commits.
   useEffect(() => {
     if (incomplete) return;
-    quoteReturn(data.shopId, items.map((item) => ({ reason: data.reasons?.[item.id]?.reason })))
+    quoteReturn(data.shopId, items.map((item) => ({ reason: data.reasons?.[item.id]?.reason, fees: item.fees || null })))
       .then(setQuote)
       .catch(() => setQuote(null));
   }, [incomplete, data.shopId, data.reasons, items]);

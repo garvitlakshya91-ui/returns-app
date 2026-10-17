@@ -165,6 +165,9 @@ router.post('/returns', createReturnLimiter, loadShopFromBody, planGate('createR
     if (err.code === 'QUOTA_EXCEEDED') {
       return res.status(403).json({ error: err.message, limit: err.limit, plan: err.plan, upgradeRequired: true });
     }
+    if (err.code === 'QUANTITY_EXCEEDED') {
+      return res.status(409).json({ error: err.message });
+    }
     logger.error({ err }, 'Create return error');
     res.status(500).json({ error: 'Failed to create return' });
   }
@@ -205,7 +208,13 @@ router.get('/shops/:slug/branding', async (req, res) => {
  */
 router.post('/quote', loadShopFromBody, async (req, res) => {
   try {
-    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    // Items may carry the fee table of the policy that matched them (as the
+    // lookup returned it). This is a preview only; the real fee is computed
+    // from the matched policy again when the return is created.
+    const items = (Array.isArray(req.body.items) ? req.body.items : []).map((i) => ({
+      reason: i?.reason,
+      policyFees: i?.fees && typeof i.fees === 'object' ? i.fees : null,
+    }));
     const fee = await ReturnService.quoteFee(req.shop.id, items);
     res.json({ fee, currency: req.shop.currency || 'GBP' });
   } catch (err) {

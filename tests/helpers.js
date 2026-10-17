@@ -29,6 +29,7 @@ const prismaMockFactory = () => ({
   },
   returnItem: {
     update: jest.fn(),
+    updateMany: jest.fn(),
     groupBy: jest.fn(),
   },
   returnLabel: {
@@ -48,6 +49,7 @@ const prismaMockFactory = () => ({
     deleteMany: jest.fn(),
   },
   returnEvent: {
+    updateMany: jest.fn(),
     create: jest.fn(),
     createMany: jest.fn(),
   },
@@ -95,6 +97,10 @@ function installShopifyMock() {
 
 function installPrismaMock() {
   const instance = prismaMockFactory();
+  // Interactive transactions hand the same mock back as `tx`; raw SQL (the
+  // per-order advisory lock) is a no-op.
+  instance.$transaction = jest.fn(async (fn) => (typeof fn === 'function' ? fn(instance) : Promise.all(fn)));
+  instance.$executeRaw = jest.fn().mockResolvedValue(1);
   jest.doMock('../app/config/database', () => instance);
   return instance;
 }

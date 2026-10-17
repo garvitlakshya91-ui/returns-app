@@ -106,18 +106,26 @@ class AnalyticsService {
   static async exportCsv(shopId, { customerEmail } = {}) {
     const returns = await prisma.return.findMany({
       where: { shopId, ...(customerEmail ? { customerEmail: { equals: customerEmail, mode: 'insensitive' } } : {}) },
-      include: { items: true },
+      include: { items: true, label: true, events: { orderBy: { createdAt: 'asc' } } },
       orderBy: { createdAt: 'desc' },
     });
 
     const rows = [
       [
         'Return ID', 'Order', 'Customer Name', 'Customer Email', 'Status', 'Resolution',
-        'Total Value', 'Refund Amount', 'Currency', 'Items', 'Created At', 'Processed At',
+        'Total Value', 'Refund Amount', 'Currency', 'Items', 'Item Details', 'Photo URLs',
+        'Notes', 'Label', 'Events', 'Created At', 'Processed At',
       ].join(','),
     ];
 
     for (const r of returns) {
+      const itemDetails = r.items.map((i) => {
+        const detail = i.reasonDetail ? `: ${i.reasonDetail}` : '';
+        return `${i.productTitle}${i.variantTitle ? ` (${i.variantTitle})` : ''} ×${i.quantity} [${i.reason}${detail}]`;
+      }).join(' | ');
+      const photos = r.items.flatMap((i) => i.photoUrls || []).join(' ');
+      const label = r.label ? `${r.label.carrier} ${r.label.trackingCode || ''}`.trim() : '';
+      const events = (r.events || []).map((e) => `${e.createdAt.toISOString()} ${e.type}`).join(' | ');
       rows.push([
         r.id,
         r.shopifyOrderName,
@@ -129,6 +137,11 @@ class AnalyticsService {
         r.refundAmount || '',
         r.currency,
         r.items.length,
+        escapeCsv(itemDetails),
+        escapeCsv(photos),
+        escapeCsv(r.notes),
+        escapeCsv(label),
+        escapeCsv(events),
         r.createdAt.toISOString(),
         r.processedAt?.toISOString() || '',
       ].join(','));

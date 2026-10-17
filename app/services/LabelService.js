@@ -16,6 +16,12 @@ const MANAGED_LABEL_BLOCKED_MESSAGE = 'No label was bought: managed labels need 
 const LABEL_NO_RETURNS_ADDRESS_MESSAGE = 'No label was bought: add your returns address in Settings '
   + '(Warehouse address), or set your store address in Shopify.';
 const LABEL_NO_CUSTOMER_ADDRESS_MESSAGE = 'No label was bought: this order has no shipping address to collect the return from.';
+// A lock row older than this is from a crashed attempt, not a live one.
+const LOCK_STALE_MS = 10 * 60 * 1000;
+// Pause between retries of the database writes that follow a purchase.
+const RETRY_DELAY_MS = 500;
+const LABEL_UNCERTAIN_MESSAGE = 'A label for this return may already have been bought but could not be saved. '
+  + 'Check the carrier account for this return before generating another label.';
 // Shown to the merchant when they try to approve a return with nowhere to send it.
 const RETURNS_ADDRESS_REQUIRED_MESSAGE = 'Set your returns address before approving returns: Settings → Warehouse address.';
 
@@ -46,13 +52,6 @@ class LabelService {
 
     if (!returnRecord) throw new Error(`Return ${returnId} not found`);
 
-    // One label per return. A finished label is simply returned; a label
-    // another attempt is still buying is left alone. The ReturnLabel row is
-    // the lock: it is written BEFORE postage is bought, and its unique
-    // returnId means a second concurrent call cannot get past this point.
-    if (returnRecord.label && returnRecord.label.status !== 'pending') return returnRecord.label;
-    if (returnRecord.label) throw new Error('A label for this return is already being generated');
-
     const shop = returnRecord.shop;
     const adapter = LabelService.getCarrierAdapter(shop);
 
@@ -62,19 +61,43 @@ class LabelService {
     const activeConfig = (shop.carrierConfigs || []).find((c) => c.isActive);
     const isManagedPlatform = ['shippo', 'shipengine'].includes(activeConfig?.carrier)
       && !activeConfig?.credentials?.encrypted;
+    const billing = { isManagedPlatform, managedBilling: null };
+
+    // One label per return. The ReturnLabel row is the lock and records how
+    // far a purchase got: 'pending' = lock taken, carrier not yet called;
+    // 'buying' = carrier called, result not yet saved; 'created' = done.
+    // A finished label is returned as-is. A fresh pending/buying row belongs
+    // to another attempt. A stale one is from a crash: pending can simply be
+    // taken over; buying may have bought postage, so the carrier is asked
+    // first and a found label is saved instead of buying again.
+    if (returnRecord.label) {
+      const existing = returnRecord.label;
+      if (existing.status === 'created') return existing;
+      const ageMs = Date.now() - new Date(existing.createdAt).getTime();
+      if (ageMs < LOCK_STALE_MS) throw new Error('A label for this return is already being generated');
+      if (existing.status === 'buying') {
+        const found = await LabelService._reconcilePurchase(adapter, returnId);
+        if (found) return LabelService._finishLabel(existing.id, returnId, found, adapter, shop, returnRecord, billing);
+        const err = new Error(LABEL_UNCERTAIN_MESSAGE);
+        err.code = 'LABEL_UNCERTAIN';
+        logger.error({ returnId, labelId: existing.id }, 'Label purchase outcome unknown and carrier could not confirm; not buying again');
+        eventBus.emit(LABEL_FAILED, { returnId, error: err.message, code: err.code });
+        throw err;
+      }
+      await prisma.returnLabel.delete({ where: { id: existing.id } });
+    }
 
     // A live managed label is paid for from ReturnFlow's account, so it is only
     // bought once we know the merchant can be charged for it. Simulated labels
     // cost nothing and skip the check.
-    let managedBilling = null;
     if (isManagedPlatform && adapter._isLive === true) {
       const BillingService = require('./BillingService');
-      managedBilling = await BillingService.managedLabelBilling(shop);
-      if (!managedBilling.allowed) {
+      billing.managedBilling = await BillingService.managedLabelBilling(shop);
+      if (!billing.managedBilling.allowed) {
         const err = new Error(MANAGED_LABEL_BLOCKED_MESSAGE);
         err.code = 'MANAGED_LABEL_BILLING';
-        err.reason = managedBilling.reason;
-        logger.warn({ returnId, reason: managedBilling.reason }, 'Managed label not bought: merchant cannot be charged');
+        err.reason = billing.managedBilling.reason;
+        logger.warn({ returnId, reason: billing.managedBilling.reason }, 'Managed label not bought: merchant cannot be charged');
         eventBus.emit(LABEL_FAILED, { returnId, error: err.message, code: err.code });
         throw err;
       }
@@ -107,39 +130,90 @@ class LabelService {
       throw err;
     }
 
+    // From here a purchase may happen. Say so on the lock row first, so a
+    // crash between the carrier call and the save leaves a 'buying' row
+    // (reconciled above), never a lost purchase that gets bought again.
+    let bought = false;
     try {
-      const labelResult = await adapter.generateLabel({
-        senderAddress,
-        recipientAddress,
-        weight,
-        dimensions: { length: 30, width: 20, height: 10 },
-      });
-      // The carrier actually booked (an aggregator picks one per label), so
-      // emails and the dashboard send the customer to the right drop-off.
-      const carrier = normaliseCarrier(labelResult.carrier) || adapter.carrierName;
-
-      // Only a QR code the carrier issued is any use at a drop-off point.
-      // When the carrier gives none, the customer prints the label instead;
-      // a home-made QR would only be scanned and refused.
-      const qrCodeUrl = labelResult.qrCodeUrl || null;
-
-      // If carrier returned a label URL, re-host on R2 for reliability
-      let labelUrl = labelResult.labelUrl;
-      if (labelUrl && process.env.R2_ACCOUNT_ID && !labelUrl.includes(process.env.R2_PUBLIC_URL || '')) {
-        try {
-          const pdfRes = await fetch(labelUrl);
-          if (pdfRes.ok) {
-            const buffer = Buffer.from(await pdfRes.arrayBuffer());
-            const { url } = await StorageService.uploadLabel(buffer, returnId);
-            labelUrl = url;
-          }
-        } catch (err) {
-          logger.warn({ err: err.message, returnId }, 'Label R2 upload failed, using carrier URL');
-        }
+      await prisma.returnLabel.update({ where: { id: pendingLabel.id }, data: { status: 'buying' } });
+      let labelResult;
+      try {
+        labelResult = await adapter.generateLabel({
+          senderAddress,
+          recipientAddress,
+          weight,
+          dimensions: { length: 30, width: 20, height: 10 },
+          reference: returnId,
+        });
+      } catch (carrierErr) {
+        // A timeout may still have bought the label: ask before giving up.
+        const found = await LabelService._reconcilePurchase(adapter, returnId);
+        if (!found) throw carrierErr;
+        logger.warn({ returnId, err: carrierErr.message }, 'Carrier call failed but the label exists; using it');
+        labelResult = found;
       }
+      bought = true;
+      return await LabelService._finishLabel(pendingLabel.id, returnId, labelResult, adapter, shop, returnRecord, billing);
+    } catch (err) {
+      if (bought) {
+        // Postage is bought; the row stays 'buying' so a retry reconciles
+        // instead of buying again. Never delete it.
+        logger.error({ err: err.message, returnId, labelId: pendingLabel.id }, 'Label bought but not saved; row kept as buying for reconciliation');
+      } else {
+        // Nothing was bought: release the lock so the merchant can retry.
+        await prisma.returnLabel.delete({ where: { id: pendingLabel.id } })
+          .catch((delErr) => logger.error({ returnId, err: delErr.message }, 'Could not release label lock'));
+      }
+      logger.error({ err, returnId }, 'Label generation failed');
+      eventBus.emit(LABEL_FAILED, { returnId, error: err.message });
+      throw err;
+    }
+  }
 
-      const label = await prisma.returnLabel.update({
-        where: { id: pendingLabel.id },
+  /** Ask the carrier whether a label for this return already exists. */
+  static async _reconcilePurchase(adapter, returnId) {
+    if (typeof adapter.findLabel !== 'function') return null;
+    try {
+      return await adapter.findLabel({ reference: returnId });
+    } catch (err) {
+      logger.warn({ returnId, err: err.message }, 'Could not ask the carrier about an existing label');
+      return null;
+    }
+  }
+
+  /**
+   * Save a bought label, move the return on, bill a managed label, and emit.
+   * The saves are retried a few times: a database blip right after a
+   * purchase must not lose the booking.
+   */
+  static async _finishLabel(labelRowId, returnId, labelResult, adapter, shop, returnRecord, { isManagedPlatform, managedBilling }) {
+    // The carrier actually booked (an aggregator picks one per label), so
+    // emails and the dashboard send the customer to the right drop-off.
+    const carrier = normaliseCarrier(labelResult.carrier) || adapter.carrierName;
+
+    // Only a QR code the carrier issued is any use at a drop-off point.
+    // When the carrier gives none, the customer prints the label instead;
+    // a home-made QR would only be scanned and refused.
+    const qrCodeUrl = labelResult.qrCodeUrl || null;
+
+    // If carrier returned a label URL, re-host on R2 for reliability
+    let labelUrl = labelResult.labelUrl;
+    if (labelUrl && process.env.R2_ACCOUNT_ID && !labelUrl.includes(process.env.R2_PUBLIC_URL || '')) {
+      try {
+        const pdfRes = await fetch(labelUrl);
+        if (pdfRes.ok) {
+          const buffer = Buffer.from(await pdfRes.arrayBuffer());
+          const { url } = await StorageService.uploadLabel(buffer, returnId);
+          labelUrl = url;
+        }
+      } catch (err) {
+        logger.warn({ err: err.message, returnId }, 'Label R2 upload failed, using carrier URL');
+      }
+    }
+
+    const label = await LabelService._withRetries(
+      () => prisma.returnLabel.update({
+        where: { id: labelRowId },
         data: {
           carrier,
           trackingCode: labelResult.trackingCode,
@@ -149,55 +223,64 @@ class LabelService {
           cost: labelResult.cost,
           status: 'created',
         },
-      });
+      }),
+      { returnId, step: 'save label' },
+    );
 
-      await prisma.return.update({
-        where: { id: returnId },
-        data: { status: 'LABEL_SENT' },
-      });
+    await LabelService._withRetries(
+      () => prisma.return.update({ where: { id: returnId }, data: { status: 'LABEL_SENT' } }),
+      { returnId, step: 'mark LABEL_SENT' },
+    );
 
-      // Bill the merchant for a real managed label (postage + service fee) via
-      // a Shopify usage charge. Skipped for simulated labels. Isolated in its
-      // own try/catch: the label already exists and the return is LABEL_SENT,
-      // so a billing hiccup must never turn a successful label into
-      // LABEL_FAILED (which would also suppress the customer's label email).
-      if (isManagedPlatform && !labelResult.simulated && Number(labelResult.cost) > 0
-        && !managedBilling?.devStore) {
-        const BillingService = require('./BillingService');
-        const charge = Math.round((Number(labelResult.cost) + BillingService.LABEL_FEE_GBP) * 100) / 100;
-        let usageRecordId = null;
-        let chargeError = null;
-        try {
-          usageRecordId = await BillingService.recordLabelCharge(shop, {
-            amount: charge,
-            description: `Return label ${carrier} ${returnRecord.shopifyOrderName}`,
-          });
-        } catch (billingErr) {
-          chargeError = billingErr.message;
-          logger.warn({ err: billingErr.message, returnId }, 'Managed-label billing failed after label creation (non-fatal)');
-        }
-        // Ledger entry on the return's timeline: every managed label's
-        // postage is either charged (with Shopify's usage record id) or
-        // recorded as unrecovered, so nothing is silently absorbed.
-        await LabelService._recordCharge(returnId, {
-          charged: Boolean(usageRecordId),
+    // Bill the merchant for a real managed label (postage + service fee) via
+    // a Shopify usage charge. Skipped for simulated labels. Isolated in its
+    // own try/catch: the label already exists and the return is LABEL_SENT,
+    // so a billing hiccup must never turn a successful label into
+    // LABEL_FAILED (which would also suppress the customer's label email).
+    if (isManagedPlatform && !labelResult.simulated && Number(labelResult.cost) > 0
+      && !managedBilling?.devStore) {
+      const BillingService = require('./BillingService');
+      const charge = Math.round((Number(labelResult.cost) + BillingService.LABEL_FEE_GBP) * 100) / 100;
+      let usageRecordId = null;
+      let chargeError = null;
+      try {
+        usageRecordId = await BillingService.recordLabelCharge(shop, {
           amount: charge,
-          postage: Number(labelResult.cost),
-          usageRecordId,
-          error: chargeError || (usageRecordId ? null : 'No usage line item or Shopify refused the charge'),
+          description: `Return label ${carrier} ${returnRecord.shopifyOrderName}`,
         });
+      } catch (billingErr) {
+        chargeError = billingErr.message;
+        logger.warn({ err: billingErr.message, returnId }, 'Managed-label billing failed after label creation (non-fatal)');
       }
-
-      eventBus.emit(LABEL_GENERATED, { returnId, labelId: label.id });
-      return label;
-    } catch (err) {
-      // Release the lock so the merchant can retry after fixing the cause.
-      await prisma.returnLabel.delete({ where: { id: pendingLabel.id } })
-        .catch((delErr) => logger.error({ returnId, err: delErr.message }, 'Could not release label lock'));
-      logger.error({ err, returnId }, 'Label generation failed');
-      eventBus.emit(LABEL_FAILED, { returnId, error: err.message });
-      throw err;
+      // Ledger entry on the return's timeline: every managed label's
+      // postage is either charged (with Shopify's usage record id) or
+      // recorded as unrecovered, so nothing is silently absorbed.
+      await LabelService._recordCharge(returnId, {
+        charged: Boolean(usageRecordId),
+        amount: charge,
+        postage: Number(labelResult.cost),
+        usageRecordId,
+        error: chargeError || (usageRecordId ? null : 'No usage line item or Shopify refused the charge'),
+      });
     }
+
+    eventBus.emit(LABEL_GENERATED, { returnId, labelId: label.id });
+    return label;
+  }
+
+  /** Run a database write up to 3 times with a short pause between tries. */
+  static async _withRetries(fn, { returnId, step }) {
+    let lastErr;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastErr = err;
+        logger.warn({ returnId, step, attempt, err: err.message }, 'Database write failed after label purchase; retrying');
+        if (attempt < 3) await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * attempt));
+      }
+    }
+    throw lastErr;
   }
 
   static async _recordCharge(returnId, data) {

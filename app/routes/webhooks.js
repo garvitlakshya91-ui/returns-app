@@ -1,6 +1,6 @@
 const { Router } = require('express');
 const { verifyWebhookHmac } = require('../utils/hmac');
-const { claim } = require('../utils/idempotency');
+const { claim, release } = require('../utils/idempotency');
 const prisma = require('../config/database');
 const eventBus = require('../events/eventBus');
 const { SHOP_UNINSTALLED } = require('../events/emitters');
@@ -211,14 +211,32 @@ async function handleCustomerDataRequest(payload) {
   logger.info({ email, shop: payload.shop_domain, returns: returns.length }, 'GDPR data request exported to merchant');
 }
 
-router.post('/customers/data_request', async (req, res) => {
-  res.status(200).send('OK');
+/**
+ * Compliance work is acknowledged only once it has been done. A failure
+ * answers 500 and gives the delivery's idempotency key back, so Shopify's
+ * retry is processed instead of being dropped as a duplicate.
+ */
+async function runCompliance(req, res, topic, handler) {
+  // A body that is not JSON will never become valid on retry: log it and
+  // acknowledge, so Shopify does not keep resending it.
+  let payload;
   try {
-    await handleCustomerDataRequest(JSON.parse(req.rawBody));
+    payload = JSON.parse(req.rawBody);
   } catch (err) {
-    logger.error({ err }, 'customers/data_request error');
+    logger.error({ err, topic }, 'Compliance webhook body is not JSON');
+    return res.status(200).send('OK');
   }
-});
+  try {
+    await handler(payload);
+    res.status(200).send('OK');
+  } catch (err) {
+    logger.error({ err, topic }, 'Compliance webhook failed; asking Shopify to retry');
+    await release(`shopify:${req.headers['x-shopify-webhook-id']}`);
+    res.status(500).send('Retry');
+  }
+}
+
+router.post('/customers/data_request', (req, res) => runCompliance(req, res, 'customers/data_request', handleCustomerDataRequest));
 
 /**
  * POST /webhooks/customers/redact
@@ -240,7 +258,9 @@ async function handleCustomerRedact(payload) {
 
     await StorageService.deleteAllForShop(returns.map((r) => r.id)).catch(() => {});
 
-    // Anonymize in DB
+    // Anonymize in DB: the return, what the customer wrote on its items,
+    // the photo links, and anything the timeline recorded about them.
+    const ids = returns.map((r) => r.id);
     await prisma.return.updateMany({
       where: { shopId: shop.id, customerEmail: email },
       data: {
@@ -249,18 +269,21 @@ async function handleCustomerRedact(payload) {
         notes: null,
       },
     });
+    if (ids.length > 0) {
+      await prisma.returnItem.updateMany({
+        where: { returnId: { in: ids } },
+        data: { reasonDetail: null, photoUrls: [] },
+      });
+      await prisma.returnEvent.updateMany({
+        where: { returnId: { in: ids } },
+        data: { data: { redacted: true } },
+      });
+    }
 
     logger.info({ shop: payload.shop_domain, returnsAffected: returns.length }, 'Customer data redacted');
 }
 
-router.post('/customers/redact', async (req, res) => {
-  res.status(200).send('OK');
-  try {
-    await handleCustomerRedact(JSON.parse(req.rawBody));
-  } catch (err) {
-    logger.error({ err }, 'customers/redact error');
-  }
-});
+router.post('/customers/redact', (req, res) => runCompliance(req, res, 'customers/redact', handleCustomerRedact));
 
 /**
  * POST /webhooks/shop/redact
@@ -281,14 +304,7 @@ async function handleShopRedact(payload) {
     logger.info({ shop: payload.shop_domain }, 'Shop data redacted');
 }
 
-router.post('/shop/redact', async (req, res) => {
-  res.status(200).send('OK');
-  try {
-    await handleShopRedact(JSON.parse(req.rawBody));
-  } catch (err) {
-    logger.error({ err }, 'shop/redact error');
-  }
-});
+router.post('/shop/redact', (req, res) => runCompliance(req, res, 'shop/redact', handleShopRedact));
 
 // The compliance destination configured in shopify.app.toml: one URL, the
 // topic in the header.
@@ -305,12 +321,7 @@ router.post('/', async (req, res) => {
     logger.warn({ topic }, 'Webhook for an unhandled topic at /webhooks');
     return res.status(404).send('Unknown topic');
   }
-  res.status(200).send('OK');
-  try {
-    await handler(JSON.parse(req.rawBody));
-  } catch (err) {
-    logger.error({ err, topic }, 'Compliance webhook error');
-  }
+  await runCompliance(req, res, topic, handler);
 });
 
 module.exports = router;

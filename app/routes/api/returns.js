@@ -270,7 +270,7 @@ router.put('/:id/label', async (req, res) => {
     if (!returnRecord) {
       return res.status(404).json({ error: 'Return not found or not approved' });
     }
-    if (returnRecord.label && returnRecord.label.status !== 'pending') {
+    if (returnRecord.label && returnRecord.label.status === 'created') {
       return res.json(returnRecord.label);
     }
 

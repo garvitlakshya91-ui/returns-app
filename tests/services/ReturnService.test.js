@@ -118,13 +118,47 @@ describe('ReturnService.createReturn', () => {
     expect(prisma.shop.updateMany.mock.calls[0][0].where).toEqual({ id: 'shop_test_1' });
   });
 
-  it('gives the slot back when saving the return fails', async () => {
-    prisma.return.create.mockRejectedValue(new Error('db down'));
-    await expect(ReturnService.createReturn(minimal())).rejects.toThrow('db down');
-    expect(prisma.shop.updateMany).toHaveBeenLastCalledWith({
-      where: { id: 'shop_test_1', returnCount: { gt: 0 } },
-      data: { returnCount: { decrement: 1 } },
-    });
+  it('does everything that must not race inside one transaction holding a per-order lock', async () => {
+    prisma.return.create.mockResolvedValue(fakeReturn());
+    await ReturnService.createReturn(minimal());
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    const sql = prisma.$executeRaw.mock.calls[0][0].join('?');
+    expect(sql).toMatch(/pg_advisory_xact_lock\(hashtext\(/);
+    expect(prisma.$executeRaw.mock.calls[0][1]).toBe('returnflow:order:o1');
+    // lock, then quota, then the row — all before the transaction ends
+    expect(prisma.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(prisma.shop.updateMany.mock.invocationCallOrder[0]);
+    expect(prisma.shop.updateMany.mock.invocationCallOrder[0]).toBeLessThan(prisma.return.create.mock.invocationCallOrder[0]);
+  });
+
+  it('re-checks remaining quantities under the lock: a concurrent return that took the last unit makes this one fail', async () => {
+    // Shopify says 1 unit refundable; by the time we hold the lock another open return has claimed it.
+    prisma.return.findMany.mockResolvedValue([
+      fakeReturn({ status: 'REQUESTED', items: [fakeReturnItem({ shopifyLineItemId: 'li', quantity: 1 })] }),
+    ]);
+    const req = minimal();
+    req.items = [{ ...req.items[0], refundableQuantity: 1 }];
+    await expect(ReturnService.createReturn(req)).rejects.toMatchObject({ code: 'QUANTITY_EXCEEDED', status: 409 });
+    expect(prisma.return.findMany.mock.calls[0][0].where.status.in).not.toContain('PROCESSED');
+    expect(prisma.return.create).not.toHaveBeenCalled();
+    expect(prisma.shop.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('passes the quantity re-check when the units are still free', async () => {
+    prisma.return.findMany.mockResolvedValue([]);
+    prisma.return.create.mockResolvedValue(fakeReturn());
+    const req = minimal();
+    req.items = [{ ...req.items[0], refundableQuantity: 1 }];
+    await expect(ReturnService.createReturn(req)).resolves.toBeTruthy();
+  });
+
+  it('charges each item by the policy that matched it, not the shop default', async () => {
+    prisma.return.create.mockResolvedValue(fakeReturn());
+    const req = minimal();
+    req.items = [{ ...req.items[0], reason: 'changed_mind', policyFees: { changedMind: 0, doesntFit: 0, damaged: 0 } }];
+    await ReturnService.createReturn(req);
+    expect(prisma.returnPolicy.findFirst).not.toHaveBeenCalled();
+    expect(prisma.return.create.mock.calls[0][0].data.returnFee).toBe(0);
   });
 
   it('stores the order currency when given', async () => {

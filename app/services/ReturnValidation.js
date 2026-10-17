@@ -15,9 +15,12 @@ const RESOLUTION_SWITCH = {
   EXCHANGE: 'allowExchange',
 };
 
-// Return statuses that still hold a claim on the order's items. A rejected
-// or cancelled return frees its quantities for a new request.
-const OPEN_STATUSES = ['REQUESTED', 'APPROVED', 'LABEL_SENT', 'IN_TRANSIT', 'RECEIVED', 'INSPECTING', 'PROCESSED'];
+// Return statuses that still hold a claim on the order's items beyond what
+// Shopify already knows. A processed return has been refunded on Shopify,
+// so its units are already out of refundableQuantity; counting it again
+// would hide units the customer can still return. Rejected and cancelled
+// returns hold nothing.
+const CLAIMING_STATUSES = ['REQUESTED', 'APPROVED', 'LABEL_SENT', 'IN_TRANSIT', 'RECEIVED', 'INSPECTING'];
 
 const MAX_LINE_ITEMS = 100;
 
@@ -50,7 +53,7 @@ const ORDER_QUERY = `
             quantity
             refundableQuantity
             originalUnitPriceSet { shopMoney { amount } }
-            discountedUnitPriceSet { shopMoney { amount } }
+            discountedUnitPriceAfterAllDiscountsSet { shopMoney { amount } }
             image { url }
             product { id tags collections(first: 10) { edges { node { handle } } } }
             variant { id }
@@ -98,7 +101,7 @@ class ReturnValidation {
 
     // Quantities already claimed by open returns on this order.
     const openReturns = await prisma.return.findMany({
-      where: { shopId: shop.id, shopifyOrderId: order.id, status: { in: OPEN_STATUSES } },
+      where: { shopId: shop.id, shopifyOrderId: order.id, status: { in: CLAIMING_STATUSES } },
       include: { items: true },
     });
     const claimed = {};
@@ -110,13 +113,16 @@ class ReturnValidation {
 
     const items = [];
     for (const li of lineItems) {
-      const price = Number(li.discountedUnitPriceSet?.shopMoney?.amount ?? li.originalUnitPriceSet?.shopMoney?.amount ?? 0);
+      // What the customer actually paid per unit, after every discount
+      // including order-level and code discounts.
+      const price = Number(li.discountedUnitPriceAfterAllDiscountsSet?.shopMoney?.amount ?? li.originalUnitPriceSet?.shopMoney?.amount ?? 0);
       const eligibility = await PolicyEngine.evaluateEligibility(shop.id, {
         price,
         tags: li.product?.tags || [],
         collections: (li.product?.collections?.edges || []).map((e) => e.node.handle),
       }, fulfilledAt);
-      const remaining = Math.max(0, (li.refundableQuantity ?? li.quantity) - (claimed[li.id] || 0));
+      const refundableQuantity = li.refundableQuantity ?? li.quantity;
+      const remaining = Math.max(0, refundableQuantity - (claimed[li.id] || 0));
       const eligible = eligibility.eligible && remaining > 0;
       items.push({
         id: li.id,
@@ -125,15 +131,20 @@ class ReturnValidation {
         variantId: li.variant?.id || null,
         title: li.title,
         variantTitle: li.variantTitle,
-        // What the customer actually paid per unit, after discounts.
         price,
         quantity: remaining,
+        // Shopify's own count of units still refundable; createReturn
+        // re-checks against it under a lock.
+        refundableQuantity,
         sku: li.sku,
         imageUrl: li.image?.url || null,
         eligible,
         ineligibleReason: eligibility.eligible ? (remaining > 0 ? null : 'Already returned') : eligibility.reason,
         resolutions: eligible ? ReturnValidation.allowedResolutions(eligibility.resolutions) : [],
         policyId: eligibility.policy?.id || null,
+        // The matched policy's fee table, so the fee follows the policy that
+        // made the item eligible rather than the shop default.
+        fees: eligibility.policy?.fees || null,
       });
     }
 
@@ -226,6 +237,8 @@ class ReturnValidation {
         reason: req.reason,
         reasonDetail: req.reasonDetail,
         photoUrls: [],
+        refundableQuantity: item.refundableQuantity,
+        policyFees: item.fees,
       });
     }
     if (nothingLeft || validated.length === 0) {
@@ -237,6 +250,6 @@ class ReturnValidation {
 }
 
 ReturnValidation.ValidationError = ValidationError;
-ReturnValidation.OPEN_STATUSES = OPEN_STATUSES;
+ReturnValidation.CLAIMING_STATUSES = CLAIMING_STATUSES;
 
 module.exports = ReturnValidation;

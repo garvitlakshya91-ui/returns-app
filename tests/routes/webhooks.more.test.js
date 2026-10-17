@@ -202,7 +202,7 @@ describe('Malformed JSON bodies', () => {
     expect(res.status).toBe(200);
     expect(logger.error).toHaveBeenCalledWith(
       expect.objectContaining({ err: expect.any(SyntaxError) }),
-      expect.stringMatching(/error$/),
+      expect.stringMatching(/error$|not JSON$/),
     );
     expect(prisma.shop.update).not.toHaveBeenCalled();
     expect(prisma.shop.updateMany).not.toHaveBeenCalled();
@@ -539,12 +539,15 @@ describe('GDPR compliance webhooks', () => {
     expect(logger.info).toHaveBeenCalledWith({ shop: 'test-shop.myshopify.com' }, 'Shop data redacted');
   });
 
-  it('shop/redact: a DB failure is logged and still answers 200', async () => {
+  it('shop/redact: a DB failure answers 500 so Shopify retries, and the delivery is not marked done', async () => {
     prisma.shop.findUnique.mockResolvedValue({ id: 'shop_1', returns: [] });
     prisma.shop.delete.mockRejectedValue(new Error('fk violation'));
     const res = await post('/shop/redact', JSON.stringify({ shop_domain: 'test-shop.myshopify.com' }));
     await tick();
-    expect(res.status).toBe(200);
-    expect(logger.error).toHaveBeenCalledWith(expect.objectContaining({ err: expect.any(Error) }), 'shop/redact error');
+    expect(res.status).toBe(500);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error), topic: 'shop/redact' }),
+      expect.stringMatching(/asking Shopify to retry/),
+    );
   });
 });

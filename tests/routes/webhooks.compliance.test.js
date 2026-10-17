@@ -67,6 +67,20 @@ describe('POST /webhooks — the configured compliance destination', () => {
       where: { shopId: 'shop_1', customerEmail: 'jane@x.com' },
       data: expect.objectContaining({ customerName: 'Redacted' }),
     }));
+    // What the customer wrote, their photos and anything logged about them go too.
+    expect(prisma.returnItem.updateMany).toHaveBeenCalledWith({
+      where: { returnId: { in: ['r1'] } }, data: { reasonDetail: null, photoUrls: [] },
+    });
+    expect(prisma.returnEvent.updateMany).toHaveBeenCalledWith({
+      where: { returnId: { in: ['r1'] } }, data: { data: { redacted: true } },
+    });
+  });
+
+  it('answers 500 (not 200) when the work fails, so the retry is processed rather than dropped as a duplicate', async () => {
+    prisma.shop.findUnique.mockRejectedValue(new Error('db outage'));
+    const res = await post('/webhooks', 'customers/data_request', { shop_domain: 'test-shop.myshopify.com', customer: { email: 'jane@x.com' } });
+    expect(res.status).toBe(500);
+    expect(notifications.sendEmail).not.toHaveBeenCalled();
   });
 
   it('routes shop/redact by topic header to the shop deletion handler', async () => {

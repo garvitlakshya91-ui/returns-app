@@ -45,4 +45,19 @@ function computeReturnFee(policyFees, items) {
   return Math.round(max * 100) / 100;
 }
 
-module.exports = { computeReturnFee, REASON_FEE_KEY, FEE_FREE_KEYS };
+/**
+ * The fee when each item may come from a different policy: every item is
+ * charged by its own policy's table (``item.policyFees``), falling back to
+ * ``defaultFees``; the return pays the highest single fee, as above.
+ */
+function computeReturnFeeForItems(items, defaultFees) {
+  if (!Array.isArray(items) || items.length === 0) return 0;
+  let max = 0;
+  for (const item of items) {
+    const fee = computeReturnFee(item.policyFees || defaultFees, [item]);
+    if (fee > max) max = fee;
+  }
+  return Math.round(max * 100) / 100;
+}
+
+module.exports = { computeReturnFee, computeReturnFeeForItems, REASON_FEE_KEY, FEE_FREE_KEYS };

@@ -415,10 +415,10 @@ describe('POST /api/portal/quote', () => {
   it('returns the fee the policy would charge for these reasons', async () => {
     prisma.shop.findUnique.mockResolvedValue(fakeShop({ currency: 'GBP' }));
     returnService.quoteFee = jest.fn().mockResolvedValue(2.5);
-    const res = await request(app).post('/api/portal/quote').send({ shopId: 'shop_test_1', items: [{ reason: 'changed_mind' }] });
+    const res = await request(app).post('/api/portal/quote').send({ shopId: 'shop_test_1', items: [{ reason: 'changed_mind', fees: { changedMind: 2.5 } }, { reason: 'other' }] });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ fee: 2.5, currency: 'GBP' });
-    expect(returnService.quoteFee).toHaveBeenCalledWith('shop_test_1', [{ reason: 'changed_mind' }]);
+    expect(returnService.quoteFee).toHaveBeenCalledWith('shop_test_1', [{ reason: 'changed_mind', policyFees: { changedMind: 2.5 } }, { reason: 'other', policyFees: null }]);
   });
 });
 

@@ -32,4 +32,19 @@ async function claim(key) {
   }
 }
 
-module.exports = { claim };
+/**
+ * Give a claimed key back, so the same delivery can be processed on retry.
+ * Used when processing failed after the claim was taken.
+ */
+async function release(key) {
+  if (!key) return;
+  const redis = getRedis();
+  if (!redis) return;
+  try {
+    await redis.del(`${KEY_PREFIX}${key}`);
+  } catch (err) {
+    logger.warn({ err: err.message, key }, 'Idempotency release failed');
+  }
+}
+
+module.exports = { claim, release };

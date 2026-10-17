@@ -81,7 +81,12 @@ class ShippoAdapter extends CarrierAdapter {
   }
 
   // ─── Live (Shippo: shipment → rate → transaction) ───
-  async _liveLabel({ senderAddress, recipientAddress, weight }) {
+  /** The tag every booking carries, so a purchase can be found again. */
+  static reference(returnId) { return `returnflow:${returnId}`; }
+
+  async _liveLabel({ senderAddress, recipientAddress, weight, dimensions, reference }) {
+    const dims = dimensions || { length: 30, width: 20, height: 10 };
+    const metadata = reference ? ShippoAdapter.reference(reference) : undefined;
     // 1) Create the shipment and fetch rates. For a return the parcel travels
     //    from the customer (address_from) back to the warehouse (address_to).
     const shipRes = await fetch(`${this._baseUrl}/shipments/`, {
@@ -91,10 +96,11 @@ class ShippoAdapter extends CarrierAdapter {
         address_from: this._address(senderAddress),
         address_to: this._address(recipientAddress),
         parcels: [{
-          length: '30', width: '20', height: '10', distance_unit: 'cm',
+          length: String(dims.length), width: String(dims.width), height: String(dims.height), distance_unit: 'cm',
           weight: String(Math.max(0.1, weight || 0.5)), mass_unit: 'kg',
         }],
         extra: { is_return: true },
+        metadata,
         async: false,
       }),
     });
@@ -118,7 +124,7 @@ class ShippoAdapter extends CarrierAdapter {
     const txRes = await fetch(`${this._baseUrl}/transactions/`, {
       method: 'POST',
       headers: this._headers(),
-      body: JSON.stringify({ rate: rate.object_id, label_file_type: 'PDF', async: false }),
+      body: JSON.stringify({ rate: rate.object_id, label_file_type: 'PDF', metadata, async: false }),
     });
     if (!txRes.ok) {
       const detail = await txRes.text().catch(() => '');
@@ -139,6 +145,44 @@ class ShippoAdapter extends CarrierAdapter {
       carrier: rate.provider,
       service: rate.servicelevel?.name,
     };
+  }
+
+  /**
+   * Find a label already bought for this return, by the metadata tag on the
+   * transaction. Used when a purchase may have gone through but was never
+   * saved (crash, database outage), so it is not bought twice. Scans the
+   * newest transactions first; returns null when nothing matches.
+   */
+  async findLabel({ reference, maxPages = 5 } = {}) {
+    if (!this._isLive || !reference) return null;
+    const tag = ShippoAdapter.reference(reference);
+    let url = `${this._baseUrl}/transactions/?results=100&page=1`;
+    for (let page = 0; page < maxPages && url; page++) {
+      const res = await fetch(url, { headers: this._headers() });
+      if (!res.ok) throw new Error(`Shippo transaction list failed (${res.status})`);
+      const data = await res.json();
+      const match = (data.results || []).find((t) => t.metadata === tag && t.status === 'SUCCESS');
+      if (match) {
+        // The list carries the rate as an id; the amount and carrier are optional extras.
+        let rate = null;
+        if (match.rate && typeof match.rate === 'object') rate = match.rate;
+        else if (match.rate) {
+          const rr = await fetch(`${this._baseUrl}/rates/${match.rate}`, { headers: this._headers() }).catch(() => null);
+          if (rr && rr.ok) rate = await rr.json().catch(() => null);
+        }
+        return {
+          trackingCode: match.tracking_number,
+          labelUrl: match.label_url,
+          qrCodeUrl: match.qr_code_url || null,
+          cost: rate ? Number(rate.amount) || null : null,
+          carrier: rate?.provider || null,
+          service: rate?.servicelevel?.name,
+          reconciled: true,
+        };
+      }
+      url = data.next || null;
+    }
+    return null;
   }
 }
 

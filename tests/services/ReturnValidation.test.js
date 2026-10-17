@@ -20,7 +20,7 @@ function lineItem(overrides = {}) {
     quantity: 2,
     refundableQuantity: 2,
     originalUnitPriceSet: { shopMoney: { amount: '50.00' } },
-    discountedUnitPriceSet: { shopMoney: { amount: '47.50' } },
+    discountedUnitPriceAfterAllDiscountsSet: { shopMoney: { amount: '47.50' } },
     image: { url: 'https://cdn/x.jpg' },
     product: { id: 'gid://shopify/Product/1', tags: ['knitwear'], collections: { edges: [{ node: { handle: 'winter' } }] } },
     variant: { id: 'gid://shopify/ProductVariant/1' },
@@ -74,7 +74,7 @@ describe('loadOrder', () => {
     expect(o).toMatchObject({ id: 'gid://shopify/Order/1001', name: '#1001', email: 'Jane@X.com', currency: 'GBP' });
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
-      lineItemId: LI1, price: 47.5, quantity: 2, eligible: true, resolutions: ['REFUND', 'STORE_CREDIT'],
+      lineItemId: LI1, price: 47.5, quantity: 2, refundableQuantity: 2, eligible: true, resolutions: ['REFUND', 'STORE_CREDIT'], fees: null,
     });
     expect(policyEngine.evaluateEligibility).toHaveBeenCalledWith(
       'shop_test_1', { price: 47.5, tags: ['knitwear'], collections: ['winter'] }, '2026-01-05T00:00:00Z',
@@ -88,6 +88,23 @@ describe('loadOrder', () => {
     const { items } = await ReturnValidation.loadOrder(shop(), 'gid://shopify/Order/1001');
     expect(items[0].quantity).toBe(1);
     expect(prisma.return.findMany.mock.calls[0][0].where.status.in).not.toContain('REJECTED');
+  });
+
+  it('does not count processed returns: Shopify has already taken those units out of refundableQuantity', async () => {
+    // One of two units refunded on Shopify (refundableQuantity 1); the processed return must not be subtracted again.
+    request.mockResolvedValue({ data: { order: order({ lineItems: { edges: [{ node: lineItem({ refundableQuantity: 1 }) }] } }) } });
+    const { items } = await ReturnValidation.loadOrder(shop(), 'gid://shopify/Order/1001');
+    expect(prisma.return.findMany.mock.calls[0][0].where.status.in).not.toContain('PROCESSED');
+    expect(items[0].quantity).toBe(1);
+    expect(items[0].eligible).toBe(true);
+  });
+
+  it('carries the matched policy fee table on each item', async () => {
+    policyEngine.evaluateEligibility.mockResolvedValue({
+      eligible: true, policy: { id: 'pol_free', fees: { changedMind: 0, doesntFit: 0, damaged: 0 } }, resolutions: { allowRefund: true },
+    });
+    const { items } = await ReturnValidation.loadOrder(shop(), 'gid://shopify/Order/1001');
+    expect(items[0].fees).toEqual({ changedMind: 0, doesntFit: 0, damaged: 0 });
   });
 
   it('marks an item ineligible when nothing is left to return', async () => {
@@ -189,6 +206,8 @@ describe('validateCreate — against Shopify', () => {
       reason: 'damaged',
       reasonDetail: 'torn',
       photoUrls: [],
+      refundableQuantity: 2,
+      policyFees: null,
     }]);
   });
 });

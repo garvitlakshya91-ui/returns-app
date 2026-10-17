@@ -19,6 +19,10 @@ const BASE = 'https://api.goshippo.com';
  * config.credentials = { apiKey }                 // Shippo API token
  * config.settings    = { live, servicelevelToken, carrierLabel, baseUrl }
  */
+// Transaction states in which Shippo has accepted the purchase but not yet
+// produced (or refused) the label. Treated as "unknown", never as failed.
+const PENDING_STATES = new Set(['QUEUED', 'WAITING']);
+
 // A failure the carrier reported before anything was bought. Anything else
 // (timeout, network error, 5xx) may still have bought postage.
 function definite(message) {
@@ -140,8 +144,18 @@ class ShippoAdapter extends CarrierAdapter {
       // 4xx: refused before purchase. 5xx: unknown; the caller reconciles.
       throw txRes.status < 500 ? definite(`Shippo transaction failed (${txRes.status})`) : new Error(`Shippo transaction failed (${txRes.status})`);
     }
-    const tx = await txRes.json();
+    let tx = await txRes.json();
+    if (PENDING_STATES.has(tx.status)) tx = await this._awaitTransaction(tx);
     if (tx.status !== 'SUCCESS') {
+      if (PENDING_STATES.has(tx.status)) {
+        // Shippo is still working on it. The label may yet be issued, so
+        // this is not a failure: the caller keeps its lock and reconciles
+        // the transaction (by its metadata tag) before buying anything.
+        const err = new Error(`Shippo is still processing this label (${tx.status}); it will be picked up before another is bought`);
+        err.pending = true;
+        err.transactionId = tx.object_id || null;
+        throw err;
+      }
       const msg = (tx.messages || []).map((m) => m.text).join(', ') || tx.status;
       throw definite(`Shippo label not created: ${msg}`);
     }
@@ -157,20 +171,45 @@ class ShippoAdapter extends CarrierAdapter {
   }
 
   /**
+   * Shippo sometimes answers a purchase with QUEUED/WAITING and finishes it
+   * moments later. Poll the transaction a few times before giving up on it.
+   */
+  async _awaitTransaction(tx) {
+    const attempts = Number(this._settings.pollAttempts ?? 6);
+    const delayMs = Number(this._settings.pollDelayMs ?? 2500);
+    let current = tx;
+    for (let i = 0; i < attempts && PENDING_STATES.has(current.status) && tx.object_id; i++) {
+      if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+      const res = await fetch(`${this._baseUrl}/transactions/${tx.object_id}`, { headers: this._headers() });
+      if (!res.ok) break; // still pending as far as we know
+      current = await res.json();
+    }
+    return current;
+  }
+
+  /**
    * Find a label already bought for this return, by the metadata tag on the
    * transaction. Used when a purchase may have gone through but was never
    * saved (crash, database outage), so it is not bought twice. Scans the
-   * newest transactions first; returns null when nothing matches.
+   * newest transactions first. Returns the label when one succeeded; null
+   * when nothing matches or a matching transaction is still pending
+   * (outcome unknown); `{ failed: true, message }` when every transaction
+   * for this return ended in ERROR, i.e. the carrier confirms nothing was
+   * bought.
    */
   async findLabel({ reference, maxPages = 5 } = {}) {
     if (!this._isLive || !reference) return null;
     const tag = ShippoAdapter.reference(reference);
     let url = `${this._baseUrl}/transactions/?results=100&page=1`;
+    let failures = [];
     for (let page = 0; page < maxPages && url; page++) {
       const res = await fetch(url, { headers: this._headers() });
       if (!res.ok) throw new Error(`Shippo transaction list failed (${res.status})`);
       const data = await res.json();
-      const match = (data.results || []).find((t) => t.metadata === tag && t.status === 'SUCCESS');
+      const matches = (data.results || []).filter((t) => t.metadata === tag);
+      if (matches.some((t) => PENDING_STATES.has(t.status))) return null;
+      failures = failures.concat(matches.filter((t) => t.status === 'ERROR'));
+      const match = matches.find((t) => t.status === 'SUCCESS');
       if (match) {
         // The list carries the rate as an id; the amount and carrier are optional extras.
         let rate = null;
@@ -190,6 +229,11 @@ class ShippoAdapter extends CarrierAdapter {
         };
       }
       url = data.next || null;
+    }
+    // Only once every page has been seen can "all of them failed" be said.
+    if (!url && failures.length > 0) {
+      const message = (failures[0].messages || []).map((m) => m.text).join(', ') || 'ERROR';
+      return { failed: true, message };
     }
     return null;
   }

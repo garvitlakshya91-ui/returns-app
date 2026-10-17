@@ -1,6 +1,10 @@
 // app/utils/idempotency.js — atomic first-seen claims backed by Redis SET NX EX,
 // degrading to "always allow" when Redis is absent or failing.
 let claim;
+let release;
+let complete;
+let status;
+let LEASE_SECONDS;
 let fakeRedis;
 let logger;
 
@@ -15,6 +19,8 @@ function makeFakeRedis() {
       store.set(key, { value, args });
       return 'OK';
     }),
+    get: jest.fn(async (key) => (store.has(key) ? store.get(key).value : null)),
+    del: jest.fn(async (key) => (store.delete(key) ? 1 : 0)),
   };
 }
 
@@ -28,7 +34,7 @@ beforeEach(() => {
     info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn(),
   }));
   logger = require('../../app/utils/logger');
-  ({ claim } = require('../../app/utils/idempotency'));
+  ({ claim, release, complete, status, LEASE_SECONDS } = require('../../app/utils/idempotency'));
 });
 
 describe('claim() without Redis (dev / test fallback)', () => {
@@ -63,17 +69,39 @@ describe('claim() with Redis', () => {
     await expect(claim('b')).resolves.toBe(false);
   });
 
-  it('uses an atomic SET ... EX 86400 NX under the idem: prefix, storing a timestamp', async () => {
-    const before = Date.now();
+  it('uses an atomic SET ... EX <lease> NX under the idem: prefix, storing "processing"', async () => {
     await claim('shopify:wh-7');
-    expect(fakeRedis.set).toHaveBeenCalledWith('idem:shopify:wh-7', expect.any(String), 'EX', 86400, 'NX');
-    const [, value, ...args] = fakeRedis.set.mock.calls[0];
-    const ts = Number(value);
-    expect(ts).toBeGreaterThanOrEqual(before);
-    expect(ts).toBeLessThanOrEqual(Date.now());
-    // TTL is 24h: longer than Shopify's webhook retry window
-    expect(args[args.indexOf('EX') + 1]).toBe(60 * 60 * 24);
-    expect(args).toContain('NX');
+    // A short lease while work is in progress: if the process dies the key
+    // lapses and the retry is processed instead of dropped as a duplicate.
+    expect(fakeRedis.set).toHaveBeenCalledWith('idem:shopify:wh-7', 'processing', 'EX', 10 * 60, 'NX');
+    expect(LEASE_SECONDS).toBe(600);
+  });
+
+  it('complete() keeps the key for the full 24h window as "done"; status() tells the two apart', async () => {
+    await expect(status('shopify:wh-8')).resolves.toBeNull();
+    await claim('shopify:wh-8');
+    await expect(status('shopify:wh-8')).resolves.toBe('processing');
+    await complete('shopify:wh-8');
+    expect(fakeRedis.set).toHaveBeenLastCalledWith('idem:shopify:wh-8', 'done', 'EX', 60 * 60 * 24);
+    await expect(status('shopify:wh-8')).resolves.toBe('done');
+    await expect(claim('shopify:wh-8')).resolves.toBe(false);
+  });
+
+  it('release() after a failure makes the key claimable again at once', async () => {
+    await claim('shopify:wh-9');
+    await release('shopify:wh-9');
+    await expect(status('shopify:wh-9')).resolves.toBeNull();
+    await expect(claim('shopify:wh-9')).resolves.toBe(true);
+  });
+
+  it('complete()/status() are no-ops without Redis and fail soft on Redis errors', async () => {
+    fakeRedis = null;
+    await expect(complete('k')).resolves.toBeUndefined();
+    await expect(status('k')).resolves.toBeNull();
+    fakeRedis = makeFakeRedis();
+    fakeRedis.get.mockRejectedValueOnce(new Error('timeout'));
+    await expect(status('k')).resolves.toBeNull();
+    expect(logger.warn).toHaveBeenCalledWith({ err: 'timeout', key: 'k' }, 'Idempotency status failed');
   });
 
   it('concurrent claims of the same key: exactly one wins', async () => {

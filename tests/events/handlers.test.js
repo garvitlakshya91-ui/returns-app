@@ -139,7 +139,7 @@ describe('onReturnApproved', () => {
     prisma.returnEvent.create.mockResolvedValue({});
   }
 
-  it('logs the event, emails approval, generates the label, then emails the label — in order', async () => {
+  it('logs the event, emails approval, then generates the label (which emails the label itself) — in order', async () => {
     primeHappyPath();
     loadHandler('onReturnApproved');
 
@@ -157,24 +157,13 @@ describe('onReturnApproved', () => {
     // Emails + label
     expect(notification.sendReturnApproved).toHaveBeenCalledWith(approvedRecord);
     expect(labelService.generateLabel).toHaveBeenCalledWith('ret_a1');
-    expect(notification.sendLabelReady).toHaveBeenCalledTimes(1);
-    const [retArg, labelArg] = notification.sendLabelReady.mock.calls[0];
-    expect(retArg).toBe(labelledRecord); // re-fetched WITH the label
-    expect(labelArg).toEqual(expect.objectContaining({ id: 'lbl_1', trackingCode: 'EVR123' }));
+    // The label email is sent (and recorded) by LabelService as one of the
+    // steps it can resume; the handler must not send a second copy.
+    expect(notification.sendLabelReady).not.toHaveBeenCalled();
 
-    // Second lookup includes the label relation
-    expect(prisma.return.findUnique).toHaveBeenNthCalledWith(2, {
-      where: { id: 'ret_a1' },
-      include: { label: true },
-    });
-
-    // Ordering: approved email → generateLabel → label email
-    const order = [
-      notification.sendReturnApproved.mock.invocationCallOrder[0],
-      labelService.generateLabel.mock.invocationCallOrder[0],
-      notification.sendLabelReady.mock.invocationCallOrder[0],
-    ];
-    expect(order).toEqual([...order].sort((a, b) => a - b));
+    // Ordering: approved email → generateLabel
+    expect(notification.sendReturnApproved.mock.invocationCallOrder[0])
+      .toBeLessThan(labelService.generateLabel.mock.invocationCallOrder[0]);
     expect(unhandled).toHaveLength(0);
   });
 
@@ -188,7 +177,7 @@ describe('onReturnApproved', () => {
     expect(prisma.returnEvent.create.mock.calls[0][0].data.actor).toBe('merchant');
   });
 
-  it('an approved-email failure does NOT block label generation or the label email', async () => {
+  it('an approved-email failure does NOT block label generation', async () => {
     primeHappyPath();
     notification.sendReturnApproved.mockRejectedValue(new Error('resend 500'));
     loadHandler('onReturnApproved');
@@ -197,7 +186,6 @@ describe('onReturnApproved', () => {
     await flush();
 
     expect(labelService.generateLabel).toHaveBeenCalledWith('ret_a1');
-    expect(notification.sendLabelReady).toHaveBeenCalledTimes(1);
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining('Approved email failed for ret_a1'),
       'resend 500',
@@ -411,6 +399,5 @@ describe('pipeline wiring', () => {
     });
     const types = prisma.returnEvent.create.mock.calls.map((c) => c[0].data.type);
     expect(types).toEqual(expect.arrayContaining([RETURN_APPROVED, LABEL_GENERATED]));
-    expect(notification.sendLabelReady).toHaveBeenCalledTimes(1);
   });
 });

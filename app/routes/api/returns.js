@@ -272,18 +272,19 @@ router.put('/:id/label', async (req, res) => {
     }
     const LabelService = require('../../services/LabelService');
     if (returnRecord.label && returnRecord.label.status === 'created') {
-      // The label is there; make sure the return moved on with it.
+      // Fully finished (status moved, charged, customer emailed); make sure
+      // the return moved on with it and hand it back.
       await LabelService._advanceToLabelSent(returnRecord.id);
       return res.json(returnRecord.label);
     }
 
-    const NotificationService = require('../../services/NotificationService');
+    // Anything else — no label, a failed attempt, or a label whose follow-up
+    // steps (status, charge, customer email) did not finish — is generated
+    // or resumed by LabelService, which also sends the customer's email.
     const label = await LabelService.generateLabel(returnRecord.id);
     await prisma.returnEvent.create({
       data: { returnId: returnRecord.id, type: 'label.generated', actor: 'merchant', data: { retry: true } },
     }).catch(() => {});
-    const fresh = await prisma.return.findUnique({ where: { id: returnRecord.id }, include: { label: true } });
-    if (fresh) await NotificationService.sendLabelReady(fresh, label);
     res.json(label);
   } catch (err) {
     // The reason is already on the timeline (LABEL_FAILED); tell the merchant too.

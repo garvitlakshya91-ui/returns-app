@@ -118,6 +118,36 @@ describe('ShippoAdapter — live mode (shipment → rate → transaction)', () =
     expect(err.definite).toBeUndefined();
   });
 
+  it('a QUEUED/WAITING transaction is polled until Shippo finishes it', async () => {
+    const adapter = new ShippoAdapter({ credentials: { apiKey: 'shippo_live_x' }, settings: { live: true, pollAttempts: 3, pollDelayMs: 0 } });
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ rates: [{ object_id: 'r', amount: '3', provider: 'Evri', servicelevel: {} }] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ object_id: 'tx1', status: 'QUEUED' }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ object_id: 'tx1', status: 'WAITING' }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ object_id: 'tx1', status: 'SUCCESS', tracking_number: 'T9', label_url: 'https://shippo/l.pdf' }) });
+
+    const label = await adapter.generateLabel(LABEL_ARGS);
+
+    expect(label).toMatchObject({ trackingCode: 'T9', labelUrl: 'https://shippo/l.pdf', cost: 3 });
+    expect(global.fetch.mock.calls[2][0]).toMatch(/\/transactions\/tx1$/);
+    expect(global.fetch.mock.calls[3][0]).toMatch(/\/transactions\/tx1$/);
+  });
+
+  it('a transaction still pending after polling is NOT a definite failure: the caller keeps its lock', async () => {
+    const adapter = new ShippoAdapter({ credentials: { apiKey: 'shippo_live_x' }, settings: { live: true, pollAttempts: 2, pollDelayMs: 0 } });
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ rates: [{ object_id: 'r', amount: '3', servicelevel: {} }] }) })
+      .mockResolvedValue({ ok: true, json: async () => ({ object_id: 'tx1', status: 'QUEUED' }) });
+
+    const err = await adapter.generateLabel(LABEL_ARGS).catch((e) => e);
+
+    expect(err.message).toMatch(/still processing/);
+    expect(err.definite).toBeUndefined();
+    expect(err.pending).toBe(true);
+    expect(err.transactionId).toBe('tx1');
+    expect(global.fetch).toHaveBeenCalledTimes(4); // rates, buy, 2 polls
+  });
+
   it('a network error (no response at all) is not definite', async () => {
     global.fetch = jest.fn().mockRejectedValue(new Error('ETIMEDOUT'));
     const err = await live().generateLabel(LABEL_ARGS).catch((e) => e);
@@ -162,6 +192,26 @@ describe('ShippoAdapter — findLabel (reconcile a purchase that was never saved
     expect(await live().findLabel({ reference: 'ret_9', maxPages: 2 })).toBeNull();
     expect(global.fetch).toHaveBeenCalledTimes(2);
     expect(await new ShippoAdapter({}).findLabel({ reference: 'ret_9' })).toBeNull();
+  });
+
+  it('a pending transaction for the return means "unknown" (null), never "failed"', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ results: [
+      { metadata: 'returnflow:ret_9', status: 'ERROR', messages: [{ text: 'first try' }] },
+      { metadata: 'returnflow:ret_9', status: 'WAITING' },
+    ], next: null }) });
+    expect(await live().findLabel({ reference: 'ret_9' })).toBeNull();
+  });
+
+  it('reports { failed } when every transaction for the return ended in ERROR and all pages were seen', async () => {
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ results: [{ metadata: 'returnflow:ret_9', status: 'ERROR', messages: [{ text: 'invalid address' }] }], next: 'https://api.goshippo.com/transactions/?page=2' }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ results: [{ metadata: 'returnflow:other', status: 'SUCCESS' }], next: null }) });
+    expect(await live().findLabel({ reference: 'ret_9' })).toEqual({ failed: true, message: 'invalid address' });
+  });
+
+  it('does not call it failed while pages remain unscanned (an older success could exist)', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ results: [{ metadata: 'returnflow:ret_9', status: 'ERROR' }], next: 'more' }) });
+    expect(await live().findLabel({ reference: 'ret_9', maxPages: 2 })).toBeNull();
   });
 
   it('throws on an HTTP error so the caller treats the outcome as unknown', async () => {

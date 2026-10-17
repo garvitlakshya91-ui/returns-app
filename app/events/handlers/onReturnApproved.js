@@ -35,17 +35,10 @@ eventBus.on(RETURN_APPROVED, async ({ returnId, shopId, approvedBy }) => {
     // Generate label automatically — this is the critical step and must
     // run regardless of whether the approved email succeeded.
     try {
+      // LabelService also emails the customer their label, as one of the
+      // steps it records and resumes; nothing to send from here.
       const label = await LabelService.generateLabel(returnId);
       console.log(`[Event] Label generated for return ${returnId}: ${label.trackingCode}`);
-
-      // Send label email
-      const updatedReturn = await prisma.return.findUnique({
-        where: { id: returnId },
-        include: { label: true },
-      });
-      if (updatedReturn) {
-        await NotificationService.sendLabelReady(updatedReturn, label);
-      }
     } catch (labelErr) {
       console.error(`[Event] Label generation failed for ${returnId}:`, labelErr.message);
       // Put the failure on the return's timeline so the merchant sees why no

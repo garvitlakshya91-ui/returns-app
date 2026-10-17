@@ -16,6 +16,7 @@ let eventBus;
 let shopifyRequest;
 let storage;
 let billing;
+let notification;
 let qrcode;
 const savedEnv = {};
 const ENV_KEYS = ['R2_ACCOUNT_ID', 'R2_PUBLIC_URL', 'SHIPPO_API_KEY', 'SHIPENGINE_API_KEY', 'SHIPENGINE_CARRIER_ID'];
@@ -65,6 +66,7 @@ function installMocks() {
   prisma.returnLabel.update = jest.fn().mockImplementation(async ({ where, data }) => ({ id: where.id, returnId: 'ret_lbl_1', ...data }));
   prisma.returnLabel.delete = jest.fn().mockResolvedValue({});
   prisma.returnEvent.create = jest.fn().mockResolvedValue({});
+  prisma.returnEvent.findMany = jest.fn().mockResolvedValue([]); // the label's step ledger
   prisma.return.update = jest.fn().mockResolvedValue({});
   // The status move is conditional (APPROVED only), so it is an updateMany.
   prisma.return.updateMany = jest.fn().mockResolvedValue({ count: 1 });
@@ -87,6 +89,9 @@ function installMocks() {
     managedLabelBilling: jest.fn().mockResolvedValue({ allowed: true, devStore: false, reason: null, lineItemId: 'li_1' }),
   };
   jest.doMock('../../app/services/BillingService', () => billing);
+
+  notification = { sendLabelReady: jest.fn().mockResolvedValue({ id: 'msg_label' }) };
+  jest.doMock('../../app/services/NotificationService', () => notification);
 }
 
 function load() {
@@ -154,16 +159,19 @@ describe('LabelService.generateLabel — happy path (Evri mock adapter, no R2)',
     expect(prisma.returnLabel.create).toHaveBeenCalledWith({
       data: { returnId: 'ret_lbl_1', carrier: 'evri', status: 'pending' },
     });
-    // …marked 'buying' before the carrier is called, and filled in once the label exists.
-    expect(prisma.returnLabel.update).toHaveBeenCalledTimes(2);
+    // …marked 'buying' before the carrier is called, 'saved' once the label
+    // exists, and 'created' only after the follow-up steps (status, charge,
+    // customer email) have all run.
+    expect(prisma.returnLabel.update).toHaveBeenCalledTimes(3);
     expect(prisma.returnLabel.update.mock.calls[0][0]).toEqual({ where: { id: 'lbl_new' }, data: { status: 'buying' } });
     expect(prisma.returnLabel.update.mock.calls[1][0].where).toEqual({ id: 'lbl_new' });
+    expect(prisma.returnLabel.update.mock.calls[2][0]).toEqual({ where: { id: 'lbl_new' }, data: { status: 'created' } });
     const data = prisma.returnLabel.update.mock.calls[1][0].data;
     expect(data).toMatchObject({
       carrier: 'evri',
       dropoffType: 'ParcelShop',
       cost: 3.49,
-      status: 'created',
+      status: 'saved',
       labelUrl: null,
     });
     expect(data.trackingCode).toMatch(/^EVR[0-9A-F]+$/);
@@ -181,9 +189,15 @@ describe('LabelService.generateLabel — happy path (Evri mock adapter, no R2)',
 
     expect(generated).toHaveBeenCalledWith({ returnId: 'ret_lbl_1', labelId: 'lbl_new' });
     expect(failed).not.toHaveBeenCalled();
-    expect(label).toMatchObject({ id: 'lbl_new', carrier: 'evri' });
+    expect(label).toMatchObject({ id: 'lbl_new', carrier: 'evri', status: 'created' });
     // Evri mock/BYO carrier → never billed as a managed label
     expect(billing.recordLabelCharge).not.toHaveBeenCalled();
+    // The customer is emailed their label by LabelService itself, and that is recorded.
+    expect(notification.sendLabelReady).toHaveBeenCalledTimes(1);
+    expect(notification.sendLabelReady.mock.calls[0][1]).toMatchObject({ id: 'lbl_new', status: 'saved' });
+    expect(prisma.returnEvent.create).toHaveBeenCalledWith({
+      data: { returnId: 'ret_lbl_1', type: 'label.emailed', actor: 'system', data: { to: expect.any(String) } },
+    });
   });
 
   it('throws when the return does not exist (nothing created, nothing emitted)', async () => {
@@ -749,11 +763,157 @@ describe('LabelService.generateLabel — managed-platform billing', () => {
 
     await LabelService.generateLabel('ret_lbl_1');
 
-    expect(prisma.returnEvent.create.mock.calls[0][0].data).toMatchObject({
+    const events = prisma.returnEvent.create.mock.calls.map((c) => c[0].data);
+    // Announced on the ledger BEFORE Shopify is asked, then the outcome.
+    expect(events[0]).toMatchObject({ type: 'label.charge_due', data: { amount: 4.7, postage: 4.2 } });
+    expect(events[1]).toMatchObject({
       type: 'label.charge_failed',
       data: { charged: false, usageRecordId: null, error: expect.stringMatching(/No usage line item/) },
     });
   });
+});
+
+// ---------------------------------------------------------------------------
+describe('LabelService.generateLabel — the steps after a saved label are resumable', () => {
+  const managedShop = () => shopWith([{ carrier: 'shippo', isActive: true, credentials: {}, settings: {} }]);
+  const savedLabel = (over = {}) => ({
+    id: 'lbl_saved', returnId: 'ret_lbl_1', carrier: 'evri', status: 'saved', trackingCode: 'H55',
+    labelUrl: 'https://cdn.test/returns/x/labels/1.pdf', cost: 2.75, createdAt: new Date(), ...over,
+  });
+  const eventTypes = () => prisma.returnEvent.create.mock.calls.map((c) => c[0].data.type);
+
+  it('a "saved" label resumes: status moved, charge announced then made, customer emailed, label marked created', async () => {
+    const record = primeReturn({ shop: managedShop(), label: savedLabel() });
+    load();
+    const generated = jest.fn();
+    eventBus.on(LABEL_GENERATED, generated);
+
+    const label = await LabelService.generateLabel('ret_lbl_1');
+
+    expect(prisma.returnLabel.create).not.toHaveBeenCalled(); // nothing bought again
+    expect(prisma.return.updateMany).toHaveBeenCalledWith({ where: { id: 'ret_lbl_1', status: 'APPROVED' }, data: { status: 'LABEL_SENT' } });
+    expect(eventTypes()).toEqual(['label.charge_due', 'label.charged', 'label.emailed']);
+    expect(billing.recordLabelCharge).toHaveBeenCalledTimes(1);
+    expect(billing.recordLabelCharge.mock.calls[0][1]).toMatchObject({ amount: 3.25, idempotencyKey: 'returnflow:label-charge:ret_lbl_1' });
+    expect(notification.sendLabelReady).toHaveBeenCalledWith(record, expect.objectContaining({ id: 'lbl_saved' }));
+    expect(prisma.returnLabel.update).toHaveBeenCalledWith({ where: { id: 'lbl_saved' }, data: { status: 'created' } });
+    expect(generated).toHaveBeenCalledWith({ returnId: 'ret_lbl_1', labelId: 'lbl_saved' });
+    expect(label).toMatchObject({ id: 'lbl_saved', trackingCode: 'H55', status: 'created' });
+  });
+
+  it('steps already on the ledger are not repeated: no second charge, no second email', async () => {
+    prisma.returnEvent.findMany.mockResolvedValue([
+      { type: 'label.charge_due', data: { amount: 3.25, postage: 2.75 } },
+      { type: 'label.charged', data: { amount: 3.25 } },
+      { type: 'label.emailed', data: {} },
+    ]);
+    primeReturn({ shop: managedShop(), label: savedLabel() });
+    load();
+
+    await LabelService.generateLabel('ret_lbl_1');
+
+    expect(billing.recordLabelCharge).not.toHaveBeenCalled();
+    expect(notification.sendLabelReady).not.toHaveBeenCalled();
+    expect(prisma.returnEvent.create).not.toHaveBeenCalled();
+    expect(prisma.returnLabel.update).toHaveBeenCalledWith({ where: { id: 'lbl_saved' }, data: { status: 'created' } });
+  });
+
+  it('a charge that was announced but never reached an outcome is made now, with the same key and no second announcement', async () => {
+    prisma.returnEvent.findMany.mockResolvedValue([{ type: 'label.charge_due', data: { amount: 3.25, postage: 2.75 } }]);
+    primeReturn({ shop: managedShop(), label: savedLabel() });
+    load();
+
+    await LabelService.generateLabel('ret_lbl_1');
+
+    expect(billing.recordLabelCharge).toHaveBeenCalledTimes(1);
+    expect(billing.recordLabelCharge.mock.calls[0][1]).toMatchObject({ amount: 3.25, idempotencyKey: 'returnflow:label-charge:ret_lbl_1' });
+    expect(eventTypes()).toEqual(['label.charged', 'label.emailed']);
+    // The announced amount is used as-is; billability is not recomputed.
+    expect(billing.managedLabelBilling).not.toHaveBeenCalled();
+  });
+
+  it('a failed charge is left to the retry worker: resume does not charge again', async () => {
+    prisma.returnEvent.findMany.mockResolvedValue([
+      { type: 'label.charge_due', data: { amount: 3.25, postage: 2.75 } },
+      { type: 'label.charge_failed', data: { amount: 3.25 } },
+    ]);
+    primeReturn({ shop: managedShop(), label: savedLabel() });
+    load();
+    await LabelService.generateLabel('ret_lbl_1');
+    expect(billing.recordLabelCharge).not.toHaveBeenCalled();
+    expect(eventTypes()).toEqual(['label.emailed']);
+  });
+
+  it('on resume a simulated label (no PDF) or a development store is never charged', async () => {
+    primeReturn({ shop: managedShop(), label: savedLabel({ labelUrl: null }) });
+    load();
+    await LabelService.generateLabel('ret_lbl_1');
+    expect(billing.recordLabelCharge).not.toHaveBeenCalled();
+    expect(eventTypes()).toEqual(['label.emailed']);
+
+    jest.clearAllMocks();
+    billing.managedLabelBilling.mockResolvedValue({ allowed: true, devStore: true });
+    primeReturn({ shop: managedShop(), label: savedLabel() });
+    await LabelService.generateLabel('ret_lbl_1');
+    expect(billing.recordLabelCharge).not.toHaveBeenCalled();
+    expect(eventTypes()).toEqual(['label.emailed']);
+  });
+
+  it('an email that does not go out keeps the label "saved" so the next attempt sends it, and nothing else is redone', async () => {
+    notification.sendLabelReady.mockResolvedValue(null); // NotificationService swallows failures and returns null
+    primeReturn({ label: savedLabel() }); // Evri BYO: no charge involved
+    load();
+    const generated = jest.fn();
+    eventBus.on(LABEL_GENERATED, generated);
+
+    const label = await LabelService.generateLabel('ret_lbl_1');
+
+    expect(label.status).toBe('saved');
+    expect(prisma.returnLabel.update).not.toHaveBeenCalled();
+    expect(eventTypes()).not.toContain('label.emailed');
+    expect(generated).not.toHaveBeenCalled();
+
+    // Next attempt: email goes, label is finished.
+    notification.sendLabelReady.mockResolvedValue({ id: 'msg' });
+    const done = await LabelService.generateLabel('ret_lbl_1');
+    expect(done.status).toBe('created');
+    expect(notification.sendLabelReady).toHaveBeenCalledTimes(2);
+    expect(prisma.returnLabel.update).toHaveBeenCalledWith({ where: { id: 'lbl_saved' }, data: { status: 'created' } });
+  });
+
+  it('the reviewer\'s case: label saved, status write keeps failing → label stays "saved", and the retry bills AND emails', async () => {
+    jest.doMock('../../app/services/carriers/ShippoAdapter', () => class {
+      get carrierName() { return 'shippo'; }
+
+      get _isLive() { return true; }
+
+      async generateLabel() { return { trackingCode: 'H91', labelUrl: 'https://shippo/l.pdf', cost: 2.75, carrier: 'evri', simulated: false }; }
+    });
+    primeReturn({ shop: managedShop() });
+    prisma.return.updateMany.mockRejectedValue(new Error('db down'));
+    load();
+
+    await expect(LabelService.generateLabel('ret_lbl_1')).rejects.toThrow('db down');
+
+    // Bought and saved; the row is never deleted; no charge or email happened yet.
+    expect(prisma.returnLabel.delete).not.toHaveBeenCalled();
+    const saves = prisma.returnLabel.update.mock.calls.map((c) => c[0].data.status);
+    expect(saves).toEqual(['buying', 'saved']);
+    expect(billing.recordLabelCharge).not.toHaveBeenCalled();
+    expect(notification.sendLabelReady).not.toHaveBeenCalled();
+
+    // Retry (the database is back): resumes from the saved row.
+    jest.clearAllMocks();
+    prisma.return.updateMany.mockResolvedValue({ count: 1 });
+    primeReturn({ shop: managedShop(), label: savedLabel({ id: 'lbl_new', trackingCode: 'H91', labelUrl: 'https://cdn.test/l.pdf' }) });
+    const label = await LabelService.generateLabel('ret_lbl_1');
+
+    expect(prisma.returnLabel.create).not.toHaveBeenCalled();
+    expect(billing.recordLabelCharge).toHaveBeenCalledTimes(1);
+    expect(eventTypes()).toEqual(['label.charge_due', 'label.charged', 'label.emailed']);
+    expect(notification.sendLabelReady).toHaveBeenCalledTimes(1);
+    expect(label.status).toBe('created');
+  }, 20000);
 });
 
 // ---------------------------------------------------------------------------
@@ -1008,9 +1168,37 @@ describe('LabelService.generateLabel — a bought label is never lost or bought 
     expect(findLabel).toHaveBeenCalledWith({ reference: 'ret_lbl_1' });
     expect(buy).not.toHaveBeenCalled();
     expect(prisma.returnLabel.create).not.toHaveBeenCalled();
-    expect(prisma.returnLabel.update.mock.calls[0][0]).toMatchObject({ where: { id: 'lbl_buying' }, data: { trackingCode: 'H01', status: 'created', carrier: 'evri' } });
+    expect(prisma.returnLabel.update.mock.calls[0][0]).toMatchObject({ where: { id: 'lbl_buying' }, data: { trackingCode: 'H01', status: 'saved', carrier: 'evri' } });
     expect(label.trackingCode).toBe('H01');
     expect(prisma.return.updateMany).toHaveBeenCalledWith({ where: { id: 'ret_lbl_1', status: 'APPROVED' }, data: { status: 'LABEL_SENT' } });
+  });
+
+  it('a stale "buying" row the carrier confirms as FAILED is released and a new label bought', async () => {
+    const buy = jest.fn().mockResolvedValue(bought);
+    const findLabel = jest.fn().mockResolvedValue({ failed: true, message: 'invalid address' });
+    jest.doMock('../../app/services/carriers/ShippoAdapter', adapterWith({ generateLabel: buy, findLabel }));
+    const old = new Date(Date.now() - 30 * 60 * 1000);
+    primeReturn({ shop: managedShop(), label: { id: 'lbl_buying', returnId: 'ret_lbl_1', carrier: 'royalmail', status: 'buying', createdAt: old } });
+    load();
+
+    const label = await LabelService.generateLabel('ret_lbl_1');
+
+    expect(prisma.returnLabel.delete).toHaveBeenCalledWith({ where: { id: 'lbl_buying' } });
+    expect(prisma.returnLabel.create).toHaveBeenCalledTimes(1);
+    expect(buy).toHaveBeenCalledTimes(1);
+    expect(label.trackingCode).toBe('H01');
+  });
+
+  it('an uncertain carrier error whose transaction the carrier reports as FAILED releases the lock (nothing was bought)', async () => {
+    const buy = jest.fn().mockRejectedValue(new Error('socket hang up'));
+    const findLabel = jest.fn().mockResolvedValue({ failed: true, message: 'invalid address' });
+    jest.doMock('../../app/services/carriers/ShippoAdapter', adapterWith({ generateLabel: buy, findLabel }));
+    primeReturn({ shop: managedShop() });
+    load();
+
+    await expect(LabelService.generateLabel('ret_lbl_1')).rejects.toThrow('socket hang up');
+
+    expect(prisma.returnLabel.delete).toHaveBeenCalledWith({ where: { id: 'lbl_new' } });
   });
 
   it('a stale "buying" row the carrier cannot confirm is refused, not re-bought', async () => {

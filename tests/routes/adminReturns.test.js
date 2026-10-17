@@ -234,10 +234,8 @@ describe('PUT /api/admin/returns/:id/label — generate or retry the label', () 
     expect(prisma.return.findFirst.mock.calls[0][0].where).toEqual({ id: 'r1', shopId: 'shop_test_1', status: { in: ['APPROVED', 'LABEL_SENT'] } });
   });
 
-  it('generates the label, notes the retry on the timeline and emails the customer', async () => {
+  it('generates the label and notes the retry on the timeline (LabelService emails the customer itself)', async () => {
     prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'APPROVED', label: null }));
-    const withLabel = fakeReturn({ id: 'r1', status: 'LABEL_SENT', label: { id: 'lbl_1', trackingCode: 'TRK1' } });
-    prisma.return.findUnique.mockResolvedValue(withLabel);
 
     const res = await request(app).put('/api/admin/returns/r1/label');
 
@@ -247,7 +245,14 @@ describe('PUT /api/admin/returns/:id/label — generate or retry the label', () 
     expect(prisma.returnEvent.create).toHaveBeenCalledWith({
       data: { returnId: 'r1', type: 'label.generated', actor: 'merchant', data: { retry: true } },
     });
-    expect(NotificationService.sendLabelReady).toHaveBeenCalledWith(withLabel, expect.objectContaining({ id: 'lbl_1' }));
+    expect(NotificationService.sendLabelReady).not.toHaveBeenCalled();
+  });
+
+  it('a label whose follow-up steps did not finish ("saved") is resumed through generateLabel, not handed back as-is', async () => {
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'APPROVED', label: { id: 'lbl_1', status: 'saved', trackingCode: 'TRK1' } }));
+    const res = await request(app).put('/api/admin/returns/r1/label');
+    expect(res.status).toBe(200);
+    expect(LabelService.generateLabel).toHaveBeenCalledWith('r1');
   });
 
   it('returns the existing label without generating again, but still moves an APPROVED return on', async () => {

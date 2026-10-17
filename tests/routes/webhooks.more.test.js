@@ -41,6 +41,8 @@ function makeFakeRedis() {
       store.set(key, value);
       return 'OK';
     }),
+    get: jest.fn(async (key) => (store.has(key) ? store.get(key) : null)),
+    del: jest.fn(async (key) => (store.delete(key) ? 1 : 0)),
   };
 }
 
@@ -165,7 +167,38 @@ describe('Idempotency via X-Shopify-Webhook-Id', () => {
     expect(second.status).toBe(200);
     expect(second.text).toMatch(/duplicate/);
     expect(prisma.shop.update).toHaveBeenCalledTimes(1); // not re-processed
-    expect(fakeRedis.set).toHaveBeenCalledWith('idem:shopify:wh-abc', expect.any(String), 'EX', 60 * 60 * 24, 'NX');
+    // A short processing lease first, then marked done for the full window
+    // once the response went out as a success.
+    expect(fakeRedis.set).toHaveBeenCalledWith('idem:shopify:wh-abc', 'processing', 'EX', 10 * 60, 'NX');
+    expect(fakeRedis.set).toHaveBeenCalledWith('idem:shopify:wh-abc', 'done', 'EX', 60 * 60 * 24);
+    expect(fakeRedis.store.get('idem:shopify:wh-abc')).toBe('done');
+  });
+
+  it('a redelivery while the first is still being processed is told to retry later (503), not dropped', async () => {
+    fakeRedis = makeFakeRedis();
+    // Simulate a delivery claimed by a process that is still working on it (or died holding the lease).
+    fakeRedis.store.set('idem:shopify:wh-busy', 'processing');
+    prisma.shop.findUnique.mockResolvedValue(fakeShop({ id: 'shop_1' }));
+
+    const body = JSON.stringify({ id: 78, name: '#78', fulfillments: [] });
+    const res = await post('/orders/fulfilled', body, { webhookId: 'wh-busy' });
+    await tick();
+
+    expect(res.status).toBe(503);
+    expect(res.headers['retry-after']).toBe('60');
+    expect(prisma.shop.update).not.toHaveBeenCalled();
+  });
+
+  it('a lapsed lease (process died mid-way) lets the retry be processed', async () => {
+    fakeRedis = makeFakeRedis();
+    prisma.shop.findUnique.mockResolvedValue(fakeShop({ id: 'shop_1' }));
+    prisma.shop.update.mockResolvedValue({});
+    // Redis evicted the 'processing' lease after LEASE_SECONDS: nothing stored.
+    const body = JSON.stringify({ id: 79, name: '#79', fulfillments: [] });
+    const res = await post('/orders/fulfilled', body, { webhookId: 'wh-lapsed' });
+    await tick();
+    expect(res.status).toBe(200);
+    expect(prisma.shop.update).toHaveBeenCalledTimes(1);
   });
 
   it('different webhook ids are both processed', async () => {

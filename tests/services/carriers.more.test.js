@@ -86,8 +86,8 @@ describe('ShippoAdapter — live error branches', () => {
   it('reports the raw status when the transaction is not SUCCESS and carries no messages', async () => {
     global.fetch = jest.fn()
       .mockResolvedValueOnce(okJson({ rates: [{ object_id: 'r1', amount: '3.00', servicelevel: {} }] }))
-      .mockResolvedValueOnce(okJson({ status: 'QUEUED' }));
-    await expect(live().generateLabel(FULL_ARGS)).rejects.toThrow('Shippo label not created: QUEUED');
+      .mockResolvedValueOnce(okJson({ status: 'ERROR' }));
+    await expect(live().generateLabel(FULL_ARGS)).rejects.toThrow('Shippo label not created: ERROR');
   });
 
   it('joins multiple Shippo messages into the error', async () => {

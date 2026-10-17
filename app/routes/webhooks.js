@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const crypto = require('crypto');
 const { verifyWebhookHmac } = require('../utils/hmac');
-const { claim, release } = require('../utils/idempotency');
+const { claim, release, complete, status } = require('../utils/idempotency');
 const prisma = require('../config/database');
 const eventBus = require('../events/eventBus');
 const { SHOP_UNINSTALLED } = require('../events/emitters');
@@ -37,16 +37,30 @@ router.use(webhookVerification);
 // Idempotency — Shopify retries webhooks aggressively on non-2xx responses
 // AND occasionally double-delivers in production. Without dedup we'd re-emit
 // events and double-update state. X-Shopify-Webhook-Id is stable per delivery.
+//
+// The claim is a short processing lease, marked complete only when the
+// response goes out as a success. So: a finished delivery is a duplicate
+// for the full window; one still in progress is told to come back later;
+// and if the process died mid-way, the lease lapses and the retry is
+// processed instead of being dropped.
 router.use(async (req, res, next) => {
   const webhookId = req.headers['x-shopify-webhook-id'];
   // No delivery id → nothing to dedup on. (Claiming the literal key
   // "shopify:undefined" would swallow every later header-less webhook.)
   if (!webhookId) return next();
-  const isFirstTime = await claim(`shopify:${webhookId}`);
+  const key = `shopify:${webhookId}`;
+  const isFirstTime = await claim(key);
   if (!isFirstTime) {
+    if ((await status(key)) === 'processing') {
+      logger.info({ webhookId, path: req.path }, 'Shopify webhook still being processed — asking for a later retry');
+      return res.status(503).set('Retry-After', '60').send('Processing — retry later');
+    }
     logger.info({ webhookId, path: req.path }, 'Shopify webhook duplicate — skipping');
     return res.status(200).send('OK (duplicate)');
   }
+  res.on('finish', () => {
+    if (res.statusCode < 300) complete(key).catch(() => {});
+  });
   next();
 });
 

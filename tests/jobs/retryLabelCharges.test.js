@@ -65,6 +65,24 @@ describe('retryFailedLabelCharges', () => {
     expect(result).toEqual({ due: 1, recovered: 0, stillFailing: 1 });
   });
 
+  it('a charge announced (charge_due) with no outcome for over 10 minutes is retried; a fresh one is left in flight', async () => {
+    const minutesAgo = (m) => new Date(Date.now() - m * 60 * 1000);
+    prisma.returnEvent.findMany.mockResolvedValue([
+      { returnId: 'r_lost', type: 'label.charge_due', data: { amount: 3.25, postage: 2.75 }, createdAt: minutesAgo(30) },
+      { returnId: 'r_inflight', type: 'label.charge_due', data: { amount: 3.25, postage: 2.75 }, createdAt: minutesAgo(2) },
+      { returnId: 'r_settled', type: 'label.charge_due', data: { amount: 3.25 }, createdAt: minutesAgo(40) },
+      { returnId: 'r_settled', type: 'label.charged', data: { amount: 3.25 }, createdAt: minutesAgo(39) },
+    ]);
+
+    const result = await retryFailedLabelCharges();
+
+    expect(billing.recordLabelCharge).toHaveBeenCalledTimes(1);
+    expect(billing.recordLabelCharge.mock.calls[0][1]).toEqual({ amount: 3.25, description: 'Return label evri #1042', idempotencyKey: 'returnflow:label-charge:r_lost' });
+    expect(prisma.returnEvent.create.mock.calls[0][0].data).toMatchObject({ returnId: 'r_lost', type: 'label.charged', data: { charged: true, retry: 1 } });
+    expect(prisma.returnEvent.findMany.mock.calls[0][0].where.type.in).toEqual(['label.charge_due', 'label.charge_failed', 'label.charged']);
+    expect(result).toEqual({ due: 1, recovered: 1, stillFailing: 0 });
+  });
+
   it('leaves a label alone when another worker holds the claim', async () => {
     idempotency.claim.mockResolvedValue(false);
     prisma.returnEvent.findMany.mockResolvedValue([ev('r_busy', 'label.charge_failed', { amount: 3.25 })]);

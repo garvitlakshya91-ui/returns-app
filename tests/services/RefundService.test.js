@@ -132,7 +132,9 @@ describe('double-refund guard (claim)', () => {
     expect(prisma.return.updateMany).toHaveBeenCalledTimes(2);
     expect(prisma.return.updateMany.mock.calls[1][0].data).toEqual({ processedAt: null });
     expect(prisma.return.update).not.toHaveBeenCalled();
-    expect(prisma.returnEvent.create).not.toHaveBeenCalled();
+    // Only the pre-call note of what was about to be sent; nothing recorded as done.
+    const types = prisma.returnEvent.create.mock.calls.map((c) => c[0].data.type);
+    expect(types).toEqual(['refund.attempt']);
   });
 
   it('keeps the claim when money moved but saving the result failed', async () => {
@@ -180,18 +182,37 @@ describe('reconciliation — a refund that already exists on Shopify is never re
     prisma.return.update.mockRejectedValueOnce(new Error('db down'));
     await expect(RefundService.processRefund('ret_test_1')).rejects.toThrow('db down');
 
+    // The amount about to be issued was written down before the call.
+    const attempt = prisma.returnEvent.create.mock.calls.map((c) => c[0].data).find((d) => d.type === 'refund.attempt');
+    expect(attempt.data).toMatchObject({ amount: 50, method: 'store_credit' });
+    prisma.returnEvent.findFirst.mockResolvedValue({ data: attempt.data });
+
     // Second attempt (claim retaken): Shopify already has the refund.
     shopifyClient.request.mockReset();
     shopifyClient.request.mockResolvedValueOnce(existing('gid://shopify/Refund/sc', 'ReturnFlow return #ret_test_1', 0, [{ subtotal: '50.00', tax: '0.00' }]));
     prisma.return.update.mockResolvedValue({});
     const result = await RefundService.processRefund('ret_test_1');
 
-    expect(result).toMatchObject({ reconciled: true, shopifyRefundId: 'gid://shopify/Refund/sc' });
+    expect(result).toMatchObject({ reconciled: true, shopifyRefundId: 'gid://shopify/Refund/sc', amount: 50 });
     expect(callQueries().some((q) => q.includes('refundCreate'))).toBe(false);
+    expect(prisma.returnEvent.findFirst).toHaveBeenCalledWith({ where: { returnId: 'ret_test_1', type: 'refund.attempt' }, orderBy: { createdAt: 'desc' } });
+  });
+
+  it('store credit: the amount actually sent (capped by Shopify) wins over a rebuild from line items', async () => {
+    prisma.return.findUnique.mockResolvedValue(ret({ resolution: 'STORE_CREDIT', refundAmount: null, returnFee: 5 }));
+    // Line items say 55 after the fee, but Shopify only allowed 30 and that is what was issued.
+    prisma.returnEvent.findFirst.mockResolvedValue({ data: { amount: 30, method: 'store_credit' } });
+    shopifyClient.request.mockResolvedValueOnce(existing('gid://shopify/Refund/sc', 'ReturnFlow return #ret_test_1', 0, [{ subtotal: '40.00', tax: '8.00' }, { subtotal: '12.00', tax: '0.00' }]));
+
+    const result = await RefundService.processRefund('ret_test_1');
+
+    expect(result).toMatchObject({ reconciled: true, amount: 30 });
+    expect(prisma.return.update.mock.calls[0][0].data.refundAmount).toBe(30);
   });
 
   it('rebuilds the credited amount from the refund\'s line items when the cash total is zero and nothing was saved locally', async () => {
     prisma.return.findUnique.mockResolvedValue(ret({ resolution: 'STORE_CREDIT', refundAmount: null, returnFee: 5 }));
+    prisma.returnEvent.findFirst.mockResolvedValue(null); // no refund.attempt on record (pre-dates it)
     shopifyClient.request.mockResolvedValueOnce(existing('gid://shopify/Refund/sc', 'ReturnFlow return #ret_test_1', 0, [{ subtotal: '40.00', tax: '8.00' }, { subtotal: '12.00', tax: '0.00' }]));
 
     const result = await RefundService.processRefund('ret_test_1');
@@ -231,7 +252,11 @@ describe('REFUND to the original payment', () => {
       where: { id: 'ret_test_1' },
       data: { status: 'PROCESSED', refundAmount: 48, processedAt: expect.any(Date) },
     });
-    expect(prisma.returnEvent.create.mock.calls[0][0].data).toMatchObject({
+    const events = prisma.returnEvent.create.mock.calls.map((c) => c[0].data);
+    // The capped amount is on the timeline BEFORE Shopify is called, so a
+    // failed save afterwards can still be reconciled to the true figure.
+    expect(events[0]).toMatchObject({ returnId: 'ret_test_1', type: 'refund.attempt', data: { amount: 48, method: 'original_payment' } });
+    expect(events[1]).toMatchObject({
       returnId: 'ret_test_1', type: 'refund.recorded', actor: 'system',
       data: { method: 'original_payment', amount: 48, shopifyRefundId: 'gid://shopify/Refund/9', reconciled: false },
     });

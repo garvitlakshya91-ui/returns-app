@@ -21,6 +21,14 @@ const BASE = 'https://api.shipengine.com';
  * config.credentials = { apiKey }
  * config.settings    = { live, carrierId, serviceCode, baseUrl?, carrierLabel? }
  */
+// Carrier errors with a 4xx status happened before any purchase; others
+// (5xx, timeouts) may have bought postage and are left for reconciliation.
+function markDefinite(status, message) {
+  const err = new Error(message);
+  if (Number(status) >= 400 && Number(status) < 500) err.definite = true;
+  return err;
+}
+
 class ShipEngineAdapter extends CarrierAdapter {
   get carrierName() {
     // The underlying carrier (royalmail/evri/usps) is configurable; default to
@@ -112,7 +120,7 @@ class ShipEngineAdapter extends CarrierAdapter {
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
       logger.error({ status: res.status, detail: detail.slice(0, 400) }, 'ShipEngine label create failed');
-      throw new Error(`ShipEngine label create failed (${res.status})`);
+      throw markDefinite(res.status, `ShipEngine label create failed (${res.status})`);
     }
 
     const data = await res.json();

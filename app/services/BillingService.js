@@ -176,7 +176,12 @@ async function getUsageLineItemId(client) {
  * (postage + service fee). Non-fatal: a billing hiccup must never fail label
  * generation, so this swallows errors and returns null.
  */
-async function recordLabelCharge(shop, { amount, description }) {
+/** The one idempotency key a label's charge ever uses, retries included. */
+function labelChargeKey(returnId) {
+  return `returnflow:label-charge:${returnId}`;
+}
+
+async function recordLabelCharge(shop, { amount, description, idempotencyKey }) {
   try {
     const client = await graphqlClient(shop);
     const lineItemId = await getUsageLineItemId(client);
@@ -185,8 +190,8 @@ async function recordLabelCharge(shop, { amount, description }) {
       return null;
     }
     const resp = await client.request(`
-      mutation AppUsageRecordCreate($subscriptionLineItemId: ID!, $price: MoneyInput!, $description: String!) {
-        appUsageRecordCreate(subscriptionLineItemId: $subscriptionLineItemId, price: $price, description: $description) {
+      mutation AppUsageRecordCreate($subscriptionLineItemId: ID!, $price: MoneyInput!, $description: String!, $idempotencyKey: String) {
+        appUsageRecordCreate(subscriptionLineItemId: $subscriptionLineItemId, price: $price, description: $description, idempotencyKey: $idempotencyKey) {
           appUsageRecord { id }
           userErrors { field message }
         }
@@ -198,6 +203,7 @@ async function recordLabelCharge(shop, { amount, description }) {
         // so charge in GBP, not the shop's store currency.
         price: { amount, currencyCode: 'GBP' },
         description: String(description).slice(0, 255),
+        idempotencyKey: idempotencyKey ? String(idempotencyKey).slice(0, 255) : null,
       },
     });
     const errs = resp.data?.appUsageRecordCreate?.userErrors || [];
@@ -300,5 +306,6 @@ module.exports = {
   applySubscriptionStatus,
   getUsageLineItemId,
   recordLabelCharge,
+  labelChargeKey,
   managedLabelBilling,
 };

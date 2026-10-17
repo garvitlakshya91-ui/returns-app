@@ -270,11 +270,13 @@ router.put('/:id/label', async (req, res) => {
     if (!returnRecord) {
       return res.status(404).json({ error: 'Return not found or not approved' });
     }
+    const LabelService = require('../../services/LabelService');
     if (returnRecord.label && returnRecord.label.status === 'created') {
+      // The label is there; make sure the return moved on with it.
+      await LabelService._advanceToLabelSent(returnRecord.id);
       return res.json(returnRecord.label);
     }
 
-    const LabelService = require('../../services/LabelService');
     const NotificationService = require('../../services/NotificationService');
     const label = await LabelService.generateLabel(returnRecord.id);
     await prisma.returnEvent.create({

@@ -217,7 +217,10 @@ describe('PUT /api/admin/returns/:id/label — generate or retry the label', () 
   let LabelService;
   let NotificationService;
   beforeEach(() => {
-    LabelService = { generateLabel: jest.fn().mockResolvedValue({ id: 'lbl_1', trackingCode: 'TRK1', status: 'created' }) };
+    LabelService = {
+      generateLabel: jest.fn().mockResolvedValue({ id: 'lbl_1', trackingCode: 'TRK1', status: 'created' }),
+      _advanceToLabelSent: jest.fn().mockResolvedValue({ count: 1 }),
+    };
     NotificationService = { sendLabelReady: jest.fn().mockResolvedValue({ sent: true }) };
     jest.doMock('../../app/services/LabelService', () => LabelService);
     jest.doMock('../../app/services/NotificationService', () => NotificationService);
@@ -247,12 +250,13 @@ describe('PUT /api/admin/returns/:id/label — generate or retry the label', () 
     expect(NotificationService.sendLabelReady).toHaveBeenCalledWith(withLabel, expect.objectContaining({ id: 'lbl_1' }));
   });
 
-  it('returns the existing label without generating again', async () => {
+  it('returns the existing label without generating again, but still moves an APPROVED return on', async () => {
     prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'LABEL_SENT', label: { id: 'lbl_old', status: 'created', trackingCode: 'OLD' } }));
     const res = await request(app).put('/api/admin/returns/r1/label');
     expect(res.status).toBe(200);
     expect(res.body.trackingCode).toBe('OLD');
     expect(LabelService.generateLabel).not.toHaveBeenCalled();
+    expect(LabelService._advanceToLabelSent).toHaveBeenCalledWith('r1');
   });
 
   it('422 with the reason when the label cannot be made (merchant can fix and retry)', async () => {

@@ -24,6 +24,14 @@ const PROD_BASE = 'https://api.parcel.royalmail.com';
  *    Click & Drop account, and wire label-PDF retrieval once validated against
  *    a real key (GET /api/v1/orders/{orderIdentifier}/label).
  */
+// Carrier errors with a 4xx status happened before any purchase; others
+// (5xx, timeouts) may have bought postage and are left for reconciliation.
+function markDefinite(status, message) {
+  const err = new Error(message);
+  if (Number(status) >= 400 && Number(status) < 500) err.definite = true;
+  return err;
+}
+
 class RoyalMailAdapter extends CarrierAdapter {
   get carrierName() {
     return 'royalmail';
@@ -131,7 +139,7 @@ class RoyalMailAdapter extends CarrierAdapter {
     if (!res.ok) {
       const detail = await res.text().catch(() => '');
       logger.error({ status: res.status, detail: detail.slice(0, 300) }, 'Royal Mail order create failed');
-      throw new Error(`Royal Mail order create failed (${res.status})`);
+      throw markDefinite(res.status, `Royal Mail order create failed (${res.status})`);
     }
 
     const data = await res.json();

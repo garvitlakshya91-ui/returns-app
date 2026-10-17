@@ -88,21 +88,41 @@ describe('ShippoAdapter — live mode (shipment → rate → transaction)', () =
     expect(JSON.parse(global.fetch.mock.calls[1][1].body).rate).toBe('rate_premium');
   });
 
-  it('throws when the shipment call fails', async () => {
+  // Failures before any purchase are flagged `definite` so the caller can
+  // release its lock; anything that may have bought postage is not.
+  it('a failed shipment call is a definite failure (nothing bought)', async () => {
     global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 401, text: async () => 'unauthorized' });
-    await expect(live().generateLabel(LABEL_ARGS)).rejects.toThrow(/Shippo shipment create failed \(401\)/);
+    await expect(live().generateLabel(LABEL_ARGS)).rejects.toMatchObject({ message: expect.stringMatching(/Shippo shipment create failed \(401\)/), definite: true });
   });
 
-  it('throws when there are no rates', async () => {
+  it('no rates is a definite failure', async () => {
     global.fetch = jest.fn().mockResolvedValueOnce({ ok: true, json: async () => ({ rates: [] }) });
-    await expect(live().generateLabel(LABEL_ARGS)).rejects.toThrow(/no rates/);
+    await expect(live().generateLabel(LABEL_ARGS)).rejects.toMatchObject({ message: expect.stringMatching(/no rates/), definite: true });
   });
 
-  it('throws when the transaction does not succeed', async () => {
+  it('a transaction Shopify reports as failed is definite', async () => {
     global.fetch = jest.fn()
       .mockResolvedValueOnce({ ok: true, json: async () => ({ rates: [{ object_id: 'r', amount: '3', servicelevel: {} }] }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'ERROR', messages: [{ text: 'invalid address' }] }) });
-    await expect(live().generateLabel(LABEL_ARGS)).rejects.toThrow(/invalid address/);
+    await expect(live().generateLabel(LABEL_ARGS)).rejects.toMatchObject({ message: expect.stringMatching(/invalid address/), definite: true });
+  });
+
+  it('a 4xx on the purchase is definite; a 5xx is not (the label may exist)', async () => {
+    const rates = { ok: true, json: async () => ({ rates: [{ object_id: 'r', amount: '3', servicelevel: {} }] }) };
+    global.fetch = jest.fn().mockResolvedValueOnce(rates).mockResolvedValueOnce({ ok: false, status: 402, text: async () => 'payment required' });
+    await expect(live().generateLabel(LABEL_ARGS)).rejects.toMatchObject({ definite: true });
+
+    global.fetch = jest.fn().mockResolvedValueOnce(rates).mockResolvedValueOnce({ ok: false, status: 503, text: async () => 'gateway' });
+    const err = await live().generateLabel(LABEL_ARGS).catch((e) => e);
+    expect(err.message).toMatch(/503/);
+    expect(err.definite).toBeUndefined();
+  });
+
+  it('a network error (no response at all) is not definite', async () => {
+    global.fetch = jest.fn().mockRejectedValue(new Error('ETIMEDOUT'));
+    const err = await live().generateLabel(LABEL_ARGS).catch((e) => e);
+    expect(err.message).toBe('ETIMEDOUT');
+    expect(err.definite).toBeUndefined();
   });
 });
 

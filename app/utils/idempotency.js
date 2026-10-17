@@ -12,7 +12,7 @@ const KEY_PREFIX = 'idem:';
  * (dev fallback), returns true so processing isn't blocked — the cost is
  * losing idempotency, which is acceptable in dev.
  */
-async function claim(key) {
+async function claim(key, ttlSeconds = TTL_SECONDS) {
   if (!key) return true; // No key, no dedup possible; allow processing
   const redis = getRedis();
   if (!redis) return true;
@@ -22,7 +22,7 @@ async function claim(key) {
       `${KEY_PREFIX}${key}`,
       Date.now().toString(),
       'EX',
-      TTL_SECONDS,
+      ttlSeconds,
       'NX',
     );
     return result === 'OK';

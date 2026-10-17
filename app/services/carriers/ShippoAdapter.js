@@ -19,6 +19,14 @@ const BASE = 'https://api.goshippo.com';
  * config.credentials = { apiKey }                 // Shippo API token
  * config.settings    = { live, servicelevelToken, carrierLabel, baseUrl }
  */
+// A failure the carrier reported before anything was bought. Anything else
+// (timeout, network error, 5xx) may still have bought postage.
+function definite(message) {
+  const err = new Error(message);
+  err.definite = true;
+  return err;
+}
+
 class ShippoAdapter extends CarrierAdapter {
   get carrierName() {
     return this.config?.settings?.carrierLabel || 'shippo';
@@ -107,12 +115,12 @@ class ShippoAdapter extends CarrierAdapter {
     if (!shipRes.ok) {
       const detail = await shipRes.text().catch(() => '');
       logger.error({ status: shipRes.status, detail: detail.slice(0, 300) }, 'Shippo shipment create failed');
-      throw new Error(`Shippo shipment create failed (${shipRes.status})`);
+      throw definite(`Shippo shipment create failed (${shipRes.status})`);
     }
     const shipment = await shipRes.json();
     const rates = shipment.rates || [];
     if (rates.length === 0) {
-      throw new Error('Shippo returned no rates for this shipment');
+      throw definite('Shippo returned no rates for this shipment');
     }
 
     // Prefer a configured service level; otherwise pick the cheapest rate.
@@ -129,12 +137,13 @@ class ShippoAdapter extends CarrierAdapter {
     if (!txRes.ok) {
       const detail = await txRes.text().catch(() => '');
       logger.error({ status: txRes.status, detail: detail.slice(0, 300) }, 'Shippo transaction failed');
-      throw new Error(`Shippo transaction failed (${txRes.status})`);
+      // 4xx: refused before purchase. 5xx: unknown; the caller reconciles.
+      throw txRes.status < 500 ? definite(`Shippo transaction failed (${txRes.status})`) : new Error(`Shippo transaction failed (${txRes.status})`);
     }
     const tx = await txRes.json();
     if (tx.status !== 'SUCCESS') {
       const msg = (tx.messages || []).map((m) => m.text).join(', ') || tx.status;
-      throw new Error(`Shippo label not created: ${msg}`);
+      throw definite(`Shippo label not created: ${msg}`);
     }
 
     return {

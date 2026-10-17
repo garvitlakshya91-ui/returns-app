@@ -490,24 +490,27 @@ describe('GDPR compliance webhooks', () => {
     expect(Storage.deleteAllForShop).not.toHaveBeenCalled();
   });
 
-  it('customers/redact: scopes anonymisation to the shop AND email, with a unique redacted address', async () => {
+  it('customers/redact: scopes anonymisation to the shop AND email, with a deterministic redacted address', async () => {
     prisma.shop.findUnique.mockResolvedValue(fakeShop({ id: 'shop_1' }));
     prisma.return.findMany.mockResolvedValue([{ id: 'r1' }]);
     prisma.return.updateMany.mockResolvedValue({ count: 1 });
     const body = JSON.stringify({ shop_domain: 'test-shop.myshopify.com', customer: { email: 'jane@x.com' } });
     await post('/customers/redact', body);
     await tick();
+    // Found by the live email OR the alias, so a retry after a partial run
+    // still finds rows that were already anonymised.
+    const alias = expect.stringMatching(/^redacted\+[0-9a-f]{16}@redacted\.local$/);
     expect(prisma.return.findMany).toHaveBeenCalledWith({
-      where: { shopId: 'shop_1', customerEmail: 'jane@x.com' },
+      where: { shopId: 'shop_1', OR: [{ customerEmail: { equals: 'jane@x.com', mode: 'insensitive' } }, { customerEmail: alias }] },
       select: { id: true },
     });
     const call = prisma.return.updateMany.mock.calls[0][0];
-    expect(call.where).toEqual({ shopId: 'shop_1', customerEmail: 'jane@x.com' });
-    expect(call.data.customerEmail).toMatch(/^redacted\+\d+@redacted\.local$/);
+    expect(call.where).toEqual({ id: { in: ['r1'] } });
+    expect(call.data.customerEmail).toEqual(alias);
     expect(call.data.notes).toBeNull();
   });
 
-  it('customers/redact: a photo-storage failure does not block the DB anonymisation', async () => {
+  it('customers/redact: a photo-storage failure answers 500 so Shopify retries, and anonymises nothing yet', async () => {
     prisma.shop.findUnique.mockResolvedValue(fakeShop({ id: 'shop_1' }));
     prisma.return.findMany.mockResolvedValue([{ id: 'r1' }]);
     prisma.return.updateMany.mockResolvedValue({ count: 1 });
@@ -515,9 +518,9 @@ describe('GDPR compliance webhooks', () => {
     const body = JSON.stringify({ shop_domain: 'test-shop.myshopify.com', customer: { email: 'jane@x.com' } });
     const res = await post('/customers/redact', body);
     await tick();
-    expect(res.status).toBe(200);
-    expect(prisma.return.updateMany).toHaveBeenCalled();
-    expect(logger.error).not.toHaveBeenCalled();
+    expect(res.status).toBe(500);
+    expect(prisma.return.updateMany).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalled();
   });
 
   it('shop/redact: unknown shop → no delete', async () => {

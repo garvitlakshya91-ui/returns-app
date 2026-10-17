@@ -132,6 +132,13 @@ class RefundService {
       const suggested = await RefundService._suggestedRefund(client, returnRecord);
       const amount = Math.min(Math.max(0, round2(suggested.gross - fee)), suggested.maximumRefundable);
 
+      // Put the exact amount about to be sent on the timeline first. If the
+      // save after Shopify's answer fails, reconciliation reads this instead
+      // of guessing (store credit does not report its amount back).
+      await prisma.returnEvent.create({
+        data: { returnId, type: 'refund.attempt', actor: 'system', data: { amount, method: resolution === 'REFUND' ? 'original_payment' : 'store_credit' } },
+      });
+
       outcome = resolution === 'REFUND'
         ? await RefundService._refundToOriginalPayment(client, returnRecord, amount, suggested)
         : await RefundService._refundToStoreCredit(client, returnRecord, amount, suggested.currency);
@@ -208,16 +215,25 @@ class RefundService {
     // than making a second one, and the zero-amount check reports it.
     if (returnRecord.resolution === 'REFUND' && amount <= 0) return null;
 
-    // Store credit may not show in totalRefundedSet. The credit we issued
-    // was the refunded line items' value minus our fee, so rebuild it from
-    // the refund's own line items rather than trusting a saved amount.
+    // Store credit may not show in totalRefundedSet. The amount we sent was
+    // written to the timeline just before the call (refund.attempt), capped
+    // at what Shopify allowed; use that. Only if even that is missing,
+    // rebuild it from the refund's line items minus our fee.
     let credited = amount;
     if (returnRecord.resolution !== 'REFUND' && credited <= 0) {
-      const lineValue = (match.refundLineItems?.edges || []).reduce((sum, e) => {
-        const n = e.node || {};
-        return sum + Number(n.subtotalSet?.shopMoney?.amount || 0) + Number(n.totalTaxSet?.shopMoney?.amount || 0);
-      }, 0);
-      credited = Math.max(0, round2(lineValue - Number(returnRecord.returnFee || 0)));
+      const attempt = await prisma.returnEvent.findFirst({
+        where: { returnId: returnRecord.id, type: 'refund.attempt' },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (Number(attempt?.data?.amount) > 0) {
+        credited = round2(attempt.data.amount);
+      } else {
+        const lineValue = (match.refundLineItems?.edges || []).reduce((sum, e) => {
+          const n = e.node || {};
+          return sum + Number(n.subtotalSet?.shopMoney?.amount || 0) + Number(n.totalTaxSet?.shopMoney?.amount || 0);
+        }, 0);
+        credited = Math.max(0, round2(lineValue - Number(returnRecord.returnFee || 0)));
+      }
     }
     return {
       shopifyRefundId: match.id,

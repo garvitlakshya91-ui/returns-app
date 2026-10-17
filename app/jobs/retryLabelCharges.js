@@ -1,5 +1,9 @@
 const prisma = require('../config/database');
 const logger = require('../utils/logger');
+const { claim, release } = require('../utils/idempotency');
+
+// Two workers (or two instances) must not retry the same label at once.
+const CLAIM_TTL_SECONDS = 10 * 60;
 
 // How far back to look for charges that never went through.
 const LOOKBACK_DAYS = 30;
@@ -34,8 +38,12 @@ async function retryFailedLabelCharges({ now = new Date() } = {}) {
   let recovered = 0;
   let stillFailing = 0;
   for (const [returnId, s] of due) {
+    // Atomic claim so parallel runs skip the same label; Shopify's
+    // idempotency key below is the hard guarantee against a double charge.
+    const claimKey = `label-charge-retry:${returnId}`;
+    if (!(await claim(claimKey, CLAIM_TTL_SECONDS))) continue;
     const returnRecord = await prisma.return.findUnique({ where: { id: returnId }, include: { shop: true, label: true } });
-    if (!returnRecord?.shop || !returnRecord.label) continue;
+    if (!returnRecord?.shop || !returnRecord.label) { await release(claimKey); continue; }
     const BillingService = require('../services/BillingService');
     const amount = Number(s.last.amount);
     let usageRecordId = null;
@@ -44,6 +52,7 @@ async function retryFailedLabelCharges({ now = new Date() } = {}) {
       usageRecordId = await BillingService.recordLabelCharge(returnRecord.shop, {
         amount,
         description: `Return label ${returnRecord.label.carrier} ${returnRecord.shopifyOrderName}`,
+        idempotencyKey: BillingService.labelChargeKey(returnId),
       });
     } catch (err) {
       error = err.message;
@@ -64,6 +73,7 @@ async function retryFailedLabelCharges({ now = new Date() } = {}) {
       },
     }).catch((err) => logger.error({ returnId, err: err.message }, 'Could not record label charge retry'));
     if (usageRecordId) recovered += 1; else stillFailing += 1;
+    await release(claimKey);
   }
 
   if (due.length > 0) logger.info({ due: due.length, recovered, stillFailing }, 'Managed-label charge retries done');

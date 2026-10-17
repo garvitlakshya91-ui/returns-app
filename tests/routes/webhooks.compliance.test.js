@@ -63,10 +63,18 @@ describe('POST /webhooks — the configured compliance destination', () => {
 
     expect(res.status).toBe(200);
     expect(storage.deleteAllForShop).toHaveBeenCalledWith(['r1']);
+    // Returns are found by the real email OR the alias they will carry, so a
+    // retry after a half-finished run still finds them.
+    expect(prisma.return.findMany.mock.calls[0][0].where).toEqual({
+      shopId: 'shop_1',
+      OR: [{ customerEmail: { equals: 'jane@x.com', mode: 'insensitive' } }, { customerEmail: expect.stringMatching(/^redacted\+[0-9a-f]{16}@redacted\.local$/) }],
+    });
     expect(prisma.return.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { shopId: 'shop_1', customerEmail: 'jane@x.com' },
-      data: expect.objectContaining({ customerName: 'Redacted' }),
+      where: { id: { in: ['r1'] } },
+      data: expect.objectContaining({ customerName: 'Redacted', customerEmail: expect.stringMatching(/^redacted\+[0-9a-f]{16}@redacted\.local$/) }),
     }));
+    // All three writes go in one transaction.
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     // What the customer wrote, their photos and anything logged about them go too.
     expect(prisma.returnItem.updateMany).toHaveBeenCalledWith({
       where: { returnId: { in: ['r1'] } }, data: { reasonDetail: null, photoUrls: [] },
@@ -162,5 +170,51 @@ describe('customers/data_request', () => {
     await post('/webhooks', 'customers/data_request', { shop_domain: 'test-shop.myshopify.com', customer: {} });
     await flush();
     expect(prisma.shop.findUnique).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('customers/redact — recoverable after a partial run', () => {
+  const body = { shop_domain: 'test-shop.myshopify.com', customer: { email: 'Jane@X.com' } };
+
+  it('uses the same alias for the same email every time (case-insensitive)', async () => {
+    prisma.shop.findUnique.mockResolvedValue(fakeShop({ id: 'shop_1' }));
+    prisma.return.findMany.mockResolvedValue([{ id: 'r1' }]);
+    prisma.return.updateMany.mockResolvedValue({ count: 1 });
+
+    await post('/webhooks', 'customers/redact', body);
+    await flush();
+    const first = prisma.return.updateMany.mock.calls[0][0].data.customerEmail;
+
+    await post('/webhooks', 'customers/redact', { ...body, customer: { email: 'jane@x.com' } });
+    await flush();
+    const second = prisma.return.updateMany.mock.calls[1][0].data.customerEmail;
+
+    expect(first).toBe(second);
+    expect(first).not.toContain('jane');
+  });
+
+  it('answers 500 (so Shopify retries) when the photos cannot be deleted, and touches no rows', async () => {
+    prisma.shop.findUnique.mockResolvedValue(fakeShop({ id: 'shop_1' }));
+    prisma.return.findMany.mockResolvedValue([{ id: 'r1' }]);
+    storage.deleteAllForShop.mockRejectedValueOnce(new Error('R2 down'));
+
+    const res = await post('/webhooks', 'customers/redact', body);
+    await flush();
+
+    expect(res.status).toBe(500);
+    expect(prisma.return.updateMany).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('acknowledges with nothing to do when the customer has no returns', async () => {
+    prisma.shop.findUnique.mockResolvedValue(fakeShop({ id: 'shop_1' }));
+    prisma.return.findMany.mockResolvedValue([]);
+
+    const res = await post('/webhooks', 'customers/redact', body);
+    await flush();
+
+    expect(res.status).toBe(200);
+    expect(storage.deleteAllForShop).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });

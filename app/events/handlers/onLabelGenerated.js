@@ -4,8 +4,10 @@ const prisma = require('../../config/database');
 
 eventBus.on(LABEL_GENERATED, async ({ returnId, labelId }) => {
   try {
-    await prisma.return.update({
-      where: { id: returnId },
+    // Only an approved return moves on; a label finishing late must not
+    // overwrite PROCESSED or REJECTED.
+    await prisma.return.updateMany({
+      where: { id: returnId, status: 'APPROVED' },
       data: { status: 'LABEL_SENT' },
     });
 

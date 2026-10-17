@@ -84,7 +84,13 @@ class LabelService {
     // first and a found label is saved instead of buying again.
     if (returnRecord.label) {
       const existing = returnRecord.label;
-      if (existing.status === 'created') return existing;
+      if (existing.status === 'created') {
+        // The label exists; make sure the return moved on too (a retry after
+        // the status write failed must finish the job, not just hand the
+        // label back).
+        await LabelService._advanceToLabelSent(returnId);
+        return existing;
+      }
       const ageMs = Date.now() - new Date(existing.createdAt).getTime();
       if (ageMs < LOCK_STALE_MS) throw new Error('A label for this return is already being generated');
       if (existing.status === 'buying') {
@@ -160,9 +166,22 @@ class LabelService {
       } catch (carrierErr) {
         // A timeout may still have bought the label: ask before giving up.
         const found = await LabelService._reconcilePurchase(adapter, returnId);
-        if (!found) throw carrierErr;
-        logger.warn({ returnId, err: carrierErr.message }, 'Carrier call failed but the label exists; using it');
-        labelResult = found;
+        if (found) {
+          logger.warn({ returnId, err: carrierErr.message }, 'Carrier call failed but the label exists; using it');
+          labelResult = found;
+        } else if (carrierErr.definite === true) {
+          // The carrier said no before anything was bought: safe to retry later.
+          throw carrierErr;
+        } else {
+          // Unknown outcome (timeout, network error, carrier 5xx) and the
+          // carrier cannot confirm: treat it as possibly bought. The row
+          // stays 'buying' and is reconciled before any later purchase.
+          bought = true;
+          const err = new Error(LABEL_UNCERTAIN_MESSAGE);
+          err.code = 'LABEL_UNCERTAIN';
+          err.cause = carrierErr;
+          throw err;
+        }
       }
       bought = true;
       return await LabelService._finishLabel(pendingLabel.id, returnId, labelResult, adapter, shop, returnRecord, billing);
@@ -240,7 +259,7 @@ class LabelService {
     );
 
     await LabelService._withRetries(
-      () => prisma.return.update({ where: { id: returnId }, data: { status: 'LABEL_SENT' } }),
+      () => LabelService._advanceToLabelSent(returnId),
       { returnId, step: 'mark LABEL_SENT' },
     );
 
@@ -259,6 +278,9 @@ class LabelService {
         usageRecordId = await BillingService.recordLabelCharge(shop, {
           amount: charge,
           description: `Return label ${carrier} ${returnRecord.shopifyOrderName}`,
+          // Shopify refuses a second charge with the same key, so a retry
+          // (ours or a parallel worker's) can never bill the label twice.
+          idempotencyKey: BillingService.labelChargeKey(returnId),
         });
       } catch (billingErr) {
         chargeError = billingErr.message;
@@ -278,6 +300,18 @@ class LabelService {
 
     eventBus.emit(LABEL_GENERATED, { returnId, labelId: label.id });
     return label;
+  }
+
+  /**
+   * Move an approved return to LABEL_SENT. Conditional, so a label that
+   * finishes after the merchant has already processed the refund (or
+   * rejected the return) cannot drag the status backwards.
+   */
+  static async _advanceToLabelSent(returnId) {
+    return prisma.return.updateMany({
+      where: { id: returnId, status: 'APPROVED' },
+      data: { status: 'LABEL_SENT' },
+    });
   }
 
   /** Run a database write up to 3 times with a short pause between tries. */

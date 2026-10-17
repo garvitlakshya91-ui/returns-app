@@ -1,4 +1,5 @@
 const { Router } = require('express');
+const crypto = require('crypto');
 const { verifyWebhookHmac } = require('../utils/hmac');
 const { claim, release } = require('../utils/idempotency');
 const prisma = require('../config/database');
@@ -243,45 +244,60 @@ router.post('/customers/data_request', (req, res) => runCompliance(req, res, 'cu
  * POST /webhooks/customers/redact
  * Anonymize customer data 30 days after a deletion request.
  */
+/**
+ * The anonymised address for a customer is derived from their email, not
+ * the clock, so a retry after a partial run can find the same returns
+ * again (by the original email or the alias) and finish the job.
+ */
+function redactedAlias(email) {
+  const hash = crypto.createHash('sha256').update(String(email).trim().toLowerCase()).digest('hex').slice(0, 16);
+  return `redacted+${hash}@redacted.local`;
+}
+
 async function handleCustomerRedact(payload) {
-    const email = payload.customer?.email;
-    if (!email) return;
+  const email = payload.customer?.email;
+  if (!email) return;
 
-    // Find the shop by domain to scope the redaction
-    const shop = await prisma.shop.findUnique({ where: { shopifyDomain: payload.shop_domain } });
-    if (!shop) return;
+  // Find the shop by domain to scope the redaction
+  const shop = await prisma.shop.findUnique({ where: { shopifyDomain: payload.shop_domain } });
+  if (!shop) return;
 
-    // Get affected returns to clean up R2 photos
-    const returns = await prisma.return.findMany({
-      where: { shopId: shop.id, customerEmail: email },
-      select: { id: true },
-    });
+  const alias = redactedAlias(email);
+  const where = {
+    shopId: shop.id,
+    OR: [{ customerEmail: { equals: email, mode: 'insensitive' } }, { customerEmail: alias }],
+  };
+  const returns = await prisma.return.findMany({ where, select: { id: true } });
+  const ids = returns.map((r) => r.id);
+  if (ids.length === 0) {
+    logger.info({ shop: payload.shop_domain }, 'Customer redaction: nothing held');
+    return;
+  }
 
-    await StorageService.deleteAllForShop(returns.map((r) => r.id)).catch(() => {});
+  // Photos first, and not swallowed: if the files cannot be removed the
+  // request fails (500) and Shopify retries the whole thing. Deleting again
+  // is harmless.
+  await StorageService.deleteAllForShop(ids);
 
-    // Anonymize in DB: the return, what the customer wrote on its items,
-    // the photo links, and anything the timeline recorded about them.
-    const ids = returns.map((r) => r.id);
-    await prisma.return.updateMany({
-      where: { shopId: shop.id, customerEmail: email },
-      data: {
-        customerEmail: `redacted+${Date.now()}@redacted.local`,
-        customerName: 'Redacted',
-        notes: null,
-      },
-    });
-    if (ids.length > 0) {
-      await prisma.returnItem.updateMany({
-        where: { returnId: { in: ids } },
-        data: { reasonDetail: null, photoUrls: [] },
-      });
-      await prisma.returnEvent.updateMany({
-        where: { returnId: { in: ids } },
-        data: { data: { redacted: true } },
-      });
-    }
+  // Then every database change together, so a failure leaves nothing
+  // half-redacted: the return, what the customer wrote on its items, the
+  // photo links, and anything the timeline recorded about them.
+  await prisma.$transaction([
+    prisma.return.updateMany({
+      where: { id: { in: ids } },
+      data: { customerEmail: alias, customerName: 'Redacted', notes: null },
+    }),
+    prisma.returnItem.updateMany({
+      where: { returnId: { in: ids } },
+      data: { reasonDetail: null, photoUrls: [] },
+    }),
+    prisma.returnEvent.updateMany({
+      where: { returnId: { in: ids } },
+      data: { data: { redacted: true } },
+    }),
+  ]);
 
-    logger.info({ shop: payload.shop_domain, returnsAffected: returns.length }, 'Customer data redacted');
+  logger.info({ shop: payload.shop_domain, returnsAffected: ids.length }, 'Customer data redacted');
 }
 
 router.post('/customers/redact', (req, res) => runCompliance(req, res, 'customers/redact', handleCustomerRedact));

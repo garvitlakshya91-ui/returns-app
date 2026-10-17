@@ -262,18 +262,21 @@ describe('onReturnApproved', () => {
 // onLabelGenerated
 // ---------------------------------------------------------------------------
 describe('onLabelGenerated', () => {
-  it('moves the return to LABEL_SENT and logs a ReturnEvent carrying the labelId', async () => {
-    prisma.return.update.mockResolvedValue({});
+  it('moves an APPROVED return to LABEL_SENT (never backwards) and logs a ReturnEvent carrying the labelId', async () => {
+    prisma.return.updateMany.mockResolvedValue({ count: 1 });
     prisma.returnEvent.create.mockResolvedValue({});
     loadHandler('onLabelGenerated');
 
     eventBus.emit(LABEL_GENERATED, { returnId: 'ret_l1', labelId: 'lbl_9' });
     await flush();
 
-    expect(prisma.return.update).toHaveBeenCalledWith({
-      where: { id: 'ret_l1' },
+    // Conditional on APPROVED: a label finishing after the refund was
+    // processed must not drag PROCESSED back to LABEL_SENT.
+    expect(prisma.return.updateMany).toHaveBeenCalledWith({
+      where: { id: 'ret_l1', status: 'APPROVED' },
       data: { status: 'LABEL_SENT' },
     });
+    expect(prisma.return.update).not.toHaveBeenCalled();
     expect(prisma.returnEvent.create).toHaveBeenCalledTimes(1);
     const evt = prisma.returnEvent.create.mock.calls[0][0].data;
     expect(evt).toMatchObject({ returnId: 'ret_l1', type: LABEL_GENERATED, actor: 'system' });
@@ -292,7 +295,7 @@ describe('onLabelGenerated', () => {
   });
 
   it('catches a DB failure and logs it rather than rejecting', async () => {
-    prisma.return.update.mockRejectedValue(new Error('db down'));
+    prisma.return.updateMany.mockRejectedValue(new Error('db down'));
     loadHandler('onLabelGenerated');
 
     eventBus.emit(LABEL_GENERATED, { returnId: 'ret_l1', labelId: 'lbl_9' });
@@ -402,8 +405,8 @@ describe('pipeline wiring', () => {
     eventBus.emit(RETURN_APPROVED, { returnId: 'ret_p1', shopId: 'shop_test_1' });
     await flush();
 
-    expect(prisma.return.update).toHaveBeenCalledWith({
-      where: { id: 'ret_p1' },
+    expect(prisma.return.updateMany).toHaveBeenCalledWith({
+      where: { id: 'ret_p1', status: 'APPROVED' },
       data: { status: 'LABEL_SENT' },
     });
     const types = prisma.returnEvent.create.mock.calls.map((c) => c[0].data.type);

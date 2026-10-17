@@ -167,22 +167,30 @@ async function appApi(path, { method = 'GET', body, admin = false } = {}) {
 
   await appApi(`/api/admin/returns/${ret.id}/approve`, { method: 'PUT', admin: true });
   console.log('[6] Approved — waiting for label job...');
+  // Wait for a FINISHED label (the row exists as a lock before postage is
+  // bought), so the refund below runs after the label, as a merchant would.
   let detail = null;
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 30; i++) {
     await sleep(3000);
     detail = await appApi(`/api/admin/returns/${ret.id}`, { admin: true });
-    if (detail.label) break;
+    if (detail.label?.status === 'created') break;
+    const failure = (detail.events || []).find((e) => e.type === 'label.failed');
+    if (failure) throw new Error(`Label failed: ${failure.data?.error}`);
   }
-  if (!detail?.label) throw new Error(`No label after 60s (status ${detail?.status})`);
+  if (detail?.label?.status !== 'created') throw new Error(`No finished label after 90s (status ${detail?.status}, label ${detail?.label?.status || 'none'})`);
+  if (detail.status !== 'LABEL_SENT') throw new Error(`Expected LABEL_SENT after the label, got ${detail.status}`);
   const simulated = !detail.label.labelUrl;
   console.log(`[7] Label: carrier=${detail.label.carrier} tracking=${detail.label.trackingCode} cost=${detail.label.cost}`);
   console.log(`    labelUrl=${detail.label.labelUrl || '(none — SIMULATED: no carrier key on the server)'}`);
   console.log(`    qrCodeUrl=${(detail.label.qrCodeUrl || '').slice(0, 90)}`);
 
-  await appApi(`/api/admin/returns/${ret.id}/process`, { method: 'PUT', admin: true });
-  console.log('[8] Refund processed via app');
+  const processed = await appApi(`/api/admin/returns/${ret.id}/process`, { method: 'PUT', admin: true });
+  console.log(`[8] Refund processed via app — ${processed.amount} actually refunded (asked ${processed.requestedAmount})`);
 
   await sleep(3000);
+  const after = await appApi(`/api/admin/returns/${ret.id}`, { admin: true });
+  if (after.status !== 'PROCESSED') throw new Error(`Return status regressed to ${after.status} after processing`);
+  console.log('[8b] App status after processing: PROCESSED (held)');
   const check = await adminGql(accessToken, `
     query($id: ID!) { node(id: $id) { ... on Order { name displayFinancialStatus } } }`, { id: order.id });
   console.log(`[9] Shopify says ${check.node.name} is now: ${check.node.displayFinancialStatus}`);

@@ -85,7 +85,7 @@ describe('installShopFromTokenExchange', () => {
     expect(prisma.shop.upsert).toHaveBeenCalledTimes(1);
     const upsert = prisma.shop.upsert.mock.calls[0][0];
     expect(upsert.where).toEqual({ shopifyDomain: 'fresh.myshopify.com' });
-    expect(Object.keys(upsert.create).sort()).toEqual(['email', 'name', 'shopifyDomain', 'shopifyToken']);
+    expect(Object.keys(upsert.create).sort()).toEqual(['currency', 'email', 'name', 'shopifyDomain', 'shopifyToken']);
     expect(Object.keys(upsert.update).sort()).toEqual(['email', 'name', 'shopifyToken']);
     expect(upsert.create).toMatchObject({ shopifyDomain: 'fresh.myshopify.com', name: 'Fresh Shop', email: 'hi@fresh.com' });
     expect(upsert.update).toMatchObject({ name: 'Fresh Shop', email: 'hi@fresh.com' });

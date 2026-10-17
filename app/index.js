@@ -292,6 +292,8 @@ if (process.env.REDIS_URL) {
       logger.error({ err }, 'Failed to schedule nightly analytics');
     });
   }, 5000);
+  // Retry managed-label charges that did not go through (on boot, then 6-hourly)
+  require('./jobs/retryLabelCharges').startLabelChargeRetries();
 }
 
 // ─── Error handler ───

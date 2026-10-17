@@ -290,3 +290,25 @@ describe('PUT /api/admin/settings — warehouse address validation', () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe('PUT /api/admin/settings — parcel defaults', () => {
+  beforeEach(() => {
+    prisma.shop.findUnique.mockResolvedValue({ settings: {} });
+    prisma.shop.update.mockImplementation(async ({ data }) => fakeShop({ settings: data.settings }));
+  });
+
+  it('stores positive numbers, rounded to 2 dp, and clears on empty', async () => {
+    const res = await request(app).put('/api/admin/settings').send({ settings: { parcelDefaultWeightKg: '0.756', parcelLengthCm: 40, parcelWidthCm: '', parcelHeightCm: null } });
+    expect(res.status).toBe(200);
+    expect(prisma.shop.update.mock.calls[0][0].data.settings).toEqual({ parcelDefaultWeightKg: 0.76, parcelLengthCm: 40, parcelWidthCm: null, parcelHeightCm: null });
+  });
+
+  it('400 for zero, negative, non-numeric or absurd values, naming the field', async () => {
+    for (const [key, value] of [['parcelDefaultWeightKg', 0], ['parcelDefaultWeightKg', 'heavy'], ['parcelLengthCm', -5], ['parcelHeightCm', 999]]) {
+      const res = await request(app).put('/api/admin/settings').send({ settings: { [key]: value } });
+      expect(res.status).toBe(400);
+      expect(res.body.field).toBe(key);
+    }
+    expect(prisma.shop.update).not.toHaveBeenCalled();
+  });
+});

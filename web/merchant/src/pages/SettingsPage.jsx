@@ -185,6 +185,39 @@ export default function SettingsPage() {
         </Layout.Section>
 
         <Layout.Section>
+          <Card>
+            <BlockStack gap="300">
+              <Text variant="headingMd" as="h2">Parcel defaults</Text>
+              <Text as="p" tone="subdued">
+                Labels are priced by weight and size. Each item&apos;s weight comes
+                from its Shopify variant when set; otherwise the default below is
+                used per item. Postage can be refused or surcharged if a parcel
+                is heavier or larger than declared.
+              </Text>
+              <TextField
+                label="Default weight per item (kg)"
+                type="number"
+                value={settings.parcelDefaultWeightKg ?? ''}
+                onChange={(v) => updateSetting('parcelDefaultWeightKg', v)}
+                placeholder="0.5"
+                autoComplete="off"
+              />
+              <InlineStack gap="300">
+                <div style={{ flex: 1 }}>
+                  <TextField label="Length (cm)" type="number" value={settings.parcelLengthCm ?? ''} onChange={(v) => updateSetting('parcelLengthCm', v)} placeholder="30" autoComplete="off" />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField label="Width (cm)" type="number" value={settings.parcelWidthCm ?? ''} onChange={(v) => updateSetting('parcelWidthCm', v)} placeholder="20" autoComplete="off" />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField label="Height (cm)" type="number" value={settings.parcelHeightCm ?? ''} onChange={(v) => updateSetting('parcelHeightCm', v)} placeholder="10" autoComplete="off" />
+                </div>
+              </InlineStack>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+
+        <Layout.Section>
           <Button variant="primary" onClick={handleSave} loading={saving}>
             Save settings
           </Button>

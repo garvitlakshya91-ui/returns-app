@@ -974,3 +974,63 @@ describe('LabelService.generateLabel — a bought label is never lost or bought 
     expect(prisma.returnLabel.delete).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+describe('LabelService.parcelFor — real weights and the merchant\'s box', () => {
+  it('uses variant weights per unit, the merchant default for unknown items, and the merchant box size', () => {
+    load();
+    const shop = shopWith([], { settings: { parcelDefaultWeightKg: 0.8, parcelLengthCm: 40, parcelWidthCm: 25, parcelHeightCm: 15 } });
+    const ret = fakeReturn({ items: [
+      fakeReturnItem({ shopifyLineItemId: 'li_known', quantity: 2 }),
+      fakeReturnItem({ id: 'i2', shopifyLineItemId: 'li_unknown', quantity: 1 }),
+    ] });
+    expect(LabelService.parcelFor(shop, ret, { li_known: 1.2 })).toEqual({
+      weight: 3.2, // 2 × 1.2 + 1 × 0.8
+      dimensions: { length: 40, width: 25, height: 15 },
+    });
+  });
+
+  it('falls back to 0.5 kg per unit and 30 × 20 × 10 cm when nothing is configured', () => {
+    load();
+    const ret = fakeReturn({ items: [fakeReturnItem({ quantity: 3 })] });
+    expect(LabelService.parcelFor(shopWith([]), ret, {})).toEqual({ weight: 1.5, dimensions: { length: 30, width: 20, height: 10 } });
+  });
+
+  it('reads variant weights (any unit) from the order and hands the real parcel to the carrier', async () => {
+    const buy = jest.fn().mockResolvedValue({ trackingCode: 'W1', labelUrl: null, cost: 3, simulated: false, carrier: 'Evri' });
+    jest.doMock('../../app/services/carriers/ShippoAdapter', () => class {
+      get carrierName() { return 'royalmail'; }
+
+      get _isLive() { return true; }
+
+      async generateLabel(...a) { return buy(...a); }
+    });
+    shopifyRequest.mockResolvedValue({
+      data: {
+        shop: shopifyAddressResponse.data.shop,
+        order: {
+          ...shopifyAddressResponse.data.order,
+          lineItems: { edges: [
+            { node: { id: 'gid://shopify/LineItem/1', variant: { inventoryItem: { measurement: { weight: { value: 750, unit: 'GRAMS' } } } } } },
+            { node: { id: 'gid://shopify/LineItem/2', variant: { inventoryItem: { measurement: { weight: { value: 2, unit: 'POUNDS' } } } } } },
+          ] },
+        },
+      },
+    });
+    primeReturn({
+      items: [
+        fakeReturnItem({ shopifyLineItemId: 'gid://shopify/LineItem/1', quantity: 2 }),
+        fakeReturnItem({ id: 'i2', shopifyLineItemId: 'gid://shopify/LineItem/2', quantity: 1 }),
+      ],
+      shop: shopWith([{ carrier: 'shippo', isActive: true, credentials: {}, settings: {} }], { settings: { parcelLengthCm: 35 } }),
+    });
+    load();
+
+    await LabelService.generateLabel('ret_lbl_1');
+
+    const args = buy.mock.calls[0][0];
+    expect(args.weight).toBeCloseTo(2 * 0.75 + 0.907, 2);
+    expect(args.dimensions).toEqual({ length: 35, width: 20, height: 10 });
+    expect(args.reference).toBe('ret_lbl_1');
+  });
+});

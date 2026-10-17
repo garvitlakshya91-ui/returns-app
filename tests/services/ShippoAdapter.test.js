@@ -105,3 +105,47 @@ describe('ShippoAdapter — live mode (shipment → rate → transaction)', () =
     await expect(live().generateLabel(LABEL_ARGS)).rejects.toThrow(/invalid address/);
   });
 });
+
+describe('ShippoAdapter — findLabel (reconcile a purchase that was never saved)', () => {
+  const live = () => new ShippoAdapter({ credentials: { apiKey: 'shippo_live_x' }, settings: { live: true } });
+
+  it('tags shipments and transactions with the return id so they can be found again', async () => {
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ object_id: 's', rates: [{ object_id: 'r', amount: '2.75', provider: 'Evri', servicelevel: {} }] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'SUCCESS', tracking_number: 'T', label_url: 'u' }) });
+    await live().generateLabel({ senderAddress: {}, recipientAddress: {}, weight: 1, dimensions: { length: 40, width: 30, height: 20 }, reference: 'ret_9' });
+    const ship = JSON.parse(global.fetch.mock.calls[0][1].body);
+    const tx = JSON.parse(global.fetch.mock.calls[1][1].body);
+    expect(ship.metadata).toBe('returnflow:ret_9');
+    expect(tx.metadata).toBe('returnflow:ret_9');
+    expect(ship.parcels[0]).toMatchObject({ length: '40', width: '30', height: '20', weight: '1' });
+  });
+
+  it('finds a successful transaction by its tag, following pages, and resolves the rate', async () => {
+    global.fetch = jest.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ results: [{ metadata: 'returnflow:other', status: 'SUCCESS' }], next: 'https://api.goshippo.com/transactions/?page=2' }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ results: [
+        { metadata: 'returnflow:ret_9', status: 'ERROR' },
+        { metadata: 'returnflow:ret_9', status: 'SUCCESS', tracking_number: 'H01', label_url: 'https://shippo/l.pdf', qr_code_url: null, rate: 'rate_1' },
+      ], next: null }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ amount: '2.75', provider: 'Evri', servicelevel: { name: 'Standard' } }) });
+
+    const found = await live().findLabel({ reference: 'ret_9' });
+
+    expect(global.fetch.mock.calls[0][0]).toMatch(/\/transactions\/\?results=100&page=1$/);
+    expect(global.fetch.mock.calls[2][0]).toMatch(/\/rates\/rate_1$/);
+    expect(found).toEqual({ trackingCode: 'H01', labelUrl: 'https://shippo/l.pdf', qrCodeUrl: null, cost: 2.75, carrier: 'Evri', service: 'Standard', reconciled: true });
+  });
+
+  it('returns null when nothing matches within the page budget, and in simulation mode', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ results: [], next: 'more' }) });
+    expect(await live().findLabel({ reference: 'ret_9', maxPages: 2 })).toBeNull();
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(await new ShippoAdapter({}).findLabel({ reference: 'ret_9' })).toBeNull();
+  });
+
+  it('throws on an HTTP error so the caller treats the outcome as unknown', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 503 });
+    await expect(live().findLabel({ reference: 'ret_9' })).rejects.toThrow(/503/);
+  });
+});

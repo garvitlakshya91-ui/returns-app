@@ -191,6 +191,9 @@ class RefundService {
             id
             note
             totalRefundedSet { shopMoney { amount } }
+            refundLineItems(first: 50) {
+              edges { node { subtotalSet { shopMoney { amount } } totalTaxSet { shopMoney { amount } } } }
+            }
           }
         }
       }
@@ -204,9 +207,21 @@ class RefundService {
     // the same idempotency key, so Shopify hands back the same refund rather
     // than making a second one, and the zero-amount check reports it.
     if (returnRecord.resolution === 'REFUND' && amount <= 0) return null;
+
+    // Store credit may not show in totalRefundedSet. The credit we issued
+    // was the refunded line items' value minus our fee, so rebuild it from
+    // the refund's own line items rather than trusting a saved amount.
+    let credited = amount;
+    if (returnRecord.resolution !== 'REFUND' && credited <= 0) {
+      const lineValue = (match.refundLineItems?.edges || []).reduce((sum, e) => {
+        const n = e.node || {};
+        return sum + Number(n.subtotalSet?.shopMoney?.amount || 0) + Number(n.totalTaxSet?.shopMoney?.amount || 0);
+      }, 0);
+      credited = Math.max(0, round2(lineValue - Number(returnRecord.returnFee || 0)));
+    }
     return {
       shopifyRefundId: match.id,
-      amount: returnRecord.resolution === 'REFUND' ? amount : Math.max(amount, Number(returnRecord.refundAmount || 0)),
+      amount: returnRecord.resolution === 'REFUND' ? amount : credited,
       method: returnRecord.resolution === 'REFUND' ? 'original_payment' : 'store_credit',
       reconciled: true,
     };

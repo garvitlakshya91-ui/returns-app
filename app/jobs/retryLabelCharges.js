@@ -1,0 +1,80 @@
+const prisma = require('../config/database');
+const logger = require('../utils/logger');
+
+// How far back to look for charges that never went through.
+const LOOKBACK_DAYS = 30;
+// Give up on a charge after this many attempts (each retry writes an event).
+const MAX_ATTEMPTS = 5;
+
+/**
+ * Every managed label's postage is either charged to the merchant or
+ * recorded as label.charge_failed on the return's timeline. This job finds
+ * the failed ones and tries the usage charge again (the merchant may have
+ * upgraded, raised their cap, or Shopify may simply have been down).
+ * A success writes label.charged, which takes the return out of the set.
+ */
+async function retryFailedLabelCharges({ now = new Date() } = {}) {
+  const since = new Date(now.getTime() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+  const events = await prisma.returnEvent.findMany({
+    where: { type: { in: ['label.charge_failed', 'label.charged'] }, createdAt: { gte: since } },
+    orderBy: { createdAt: 'asc' },
+    select: { returnId: true, type: true, data: true, createdAt: true },
+  });
+
+  // Latest state per return: charged wins; count failed attempts.
+  const state = new Map();
+  for (const e of events) {
+    const cur = state.get(e.returnId) || { charged: false, attempts: 0, last: null };
+    if (e.type === 'label.charged') cur.charged = true;
+    else { cur.attempts += 1; cur.last = e.data || {}; }
+    state.set(e.returnId, cur);
+  }
+  const due = [...state.entries()].filter(([, s]) => !s.charged && s.attempts < MAX_ATTEMPTS && Number(s.last?.amount) > 0);
+
+  let recovered = 0;
+  let stillFailing = 0;
+  for (const [returnId, s] of due) {
+    const returnRecord = await prisma.return.findUnique({ where: { id: returnId }, include: { shop: true, label: true } });
+    if (!returnRecord?.shop || !returnRecord.label) continue;
+    const BillingService = require('../services/BillingService');
+    const amount = Number(s.last.amount);
+    let usageRecordId = null;
+    let error = null;
+    try {
+      usageRecordId = await BillingService.recordLabelCharge(returnRecord.shop, {
+        amount,
+        description: `Return label ${returnRecord.label.carrier} ${returnRecord.shopifyOrderName}`,
+      });
+    } catch (err) {
+      error = err.message;
+    }
+    await prisma.returnEvent.create({
+      data: {
+        returnId,
+        type: usageRecordId ? 'label.charged' : 'label.charge_failed',
+        actor: 'system',
+        data: {
+          charged: Boolean(usageRecordId),
+          amount,
+          postage: s.last.postage ?? null,
+          usageRecordId,
+          error: usageRecordId ? null : (error || 'No usage line item or Shopify refused the charge'),
+          retry: s.attempts,
+        },
+      },
+    }).catch((err) => logger.error({ returnId, err: err.message }, 'Could not record label charge retry'));
+    if (usageRecordId) recovered += 1; else stillFailing += 1;
+  }
+
+  if (due.length > 0) logger.info({ due: due.length, recovered, stillFailing }, 'Managed-label charge retries done');
+  return { due: due.length, recovered, stillFailing };
+}
+
+/** Run the retry on boot and every six hours after. */
+function startLabelChargeRetries() {
+  const run = () => retryFailedLabelCharges().catch((err) => logger.error({ err }, 'Label charge retry failed'));
+  setTimeout(run, 15000).unref();
+  setInterval(run, 6 * 60 * 60 * 1000).unref();
+}
+
+module.exports = { retryFailedLabelCharges, startLabelChargeRetries, MAX_ATTEMPTS, LOOKBACK_DAYS };

@@ -66,6 +66,25 @@ router.put('/', async (req, res) => {
         merged.warehousePostcode = postcode.replace(/^(.+?)(\d[A-Z]{2})$/, '$1 $2').replace(/\s+/, ' ');
       }
     }
+    // Parcel defaults: how heavy a unit is when Shopify has no weight for it,
+    // and the box size the label is booked for.
+    const PARCEL_LIMITS = {
+      parcelDefaultWeightKg: { max: 30, label: 'Default weight per item (kg)' },
+      parcelLengthCm: { max: 150, label: 'Parcel length (cm)' },
+      parcelWidthCm: { max: 150, label: 'Parcel width (cm)' },
+      parcelHeightCm: { max: 150, label: 'Parcel height (cm)' },
+    };
+    for (const [key, { max, label }] of Object.entries(PARCEL_LIMITS)) {
+      if (!(key in incoming)) continue;
+      const raw = incoming[key];
+      if (raw === '' || raw === null || raw === undefined) { merged[key] = null; continue; }
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n <= 0 || n > max) {
+        return res.status(400).json({ error: `${label} must be a number between 0 and ${max}`, field: key });
+      }
+      merged[key] = Math.round(n * 100) / 100;
+    }
+
     for (const key of SYSTEM_KEYS) {
       if (current?.settings && current.settings[key] !== undefined) merged[key] = current.settings[key];
       else delete merged[key];

@@ -16,6 +16,18 @@ const MANAGED_LABEL_BLOCKED_MESSAGE = 'No label was bought: managed labels need 
 const LABEL_NO_RETURNS_ADDRESS_MESSAGE = 'No label was bought: add your returns address in Settings '
   + '(Warehouse address), or set your store address in Shopify.';
 const LABEL_NO_CUSTOMER_ADDRESS_MESSAGE = 'No label was bought: this order has no shipping address to collect the return from.';
+// Shopify variant weights come in several units; labels are booked in kg.
+const KG_PER_UNIT = { KILOGRAMS: 1, GRAMS: 0.001, POUNDS: 0.45359237, OUNCES: 0.028349523 };
+function toKg(weight) {
+  if (!weight || !Number.isFinite(Number(weight.value)) || Number(weight.value) <= 0) return null;
+  const factor = KG_PER_UNIT[weight.unit];
+  return factor ? Number(weight.value) * factor : null;
+}
+function positive(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 // A lock row older than this is from a crashed attempt, not a live one.
 const LOCK_STALE_MS = 10 * 60 * 1000;
 // Pause between retries of the database writes that follow a purchase.
@@ -103,7 +115,7 @@ class LabelService {
       }
     }
 
-    const { senderAddress, recipientAddress, missing } = await LabelService.resolveAddresses(shop, returnRecord);
+    const { senderAddress, recipientAddress, missing, lineItemWeightsKg } = await LabelService.resolveAddresses(shop, returnRecord);
 
     // A live label is a real parcel booking: never buy one addressed to the
     // placeholder warehouse or from a customer with no address on the order.
@@ -115,7 +127,7 @@ class LabelService {
       throw err;
     }
 
-    const weight = returnRecord.items.reduce((sum, item) => sum + item.quantity * 0.5, 0);
+    const { weight, dimensions } = LabelService.parcelFor(shop, returnRecord, lineItemWeightsKg);
 
     // Take the lock. If another call got here first the unique constraint
     // fires and nothing is bought twice.
@@ -142,7 +154,7 @@ class LabelService {
           senderAddress,
           recipientAddress,
           weight,
-          dimensions: { length: 30, width: 20, height: 10 },
+          dimensions,
           reference: returnId,
         });
       } catch (carrierErr) {
@@ -326,6 +338,8 @@ class LabelService {
     const settings = shop.settings || {};
     let orderShipping = null;
     let storeAddress = null;
+    // Per-unit weight in kg by Shopify line item id, when the variant has one.
+    const lineItemWeightsKg = {};
 
     const hasRealOrder = REAL_ORDER_GID.test(returnRecord.shopifyOrderId || '');
     if (shop.shopifyToken) {
@@ -339,6 +353,9 @@ class LabelService {
             order: node(id: $orderId) @include(if: $withOrder) {
               ... on Order {
                 shippingAddress { name address1 address2 city zip provinceCode countryCodeV2 phone }
+                lineItems(first: 100) {
+                  edges { node { id variant { inventoryItem { measurement { weight { value unit } } } } } }
+                }
               }
             }
           }
@@ -350,6 +367,10 @@ class LabelService {
         });
         orderShipping = resp.data?.order?.shippingAddress || null;
         storeAddress = resp.data?.shop?.billingAddress || null;
+        for (const edge of resp.data?.order?.lineItems?.edges || []) {
+          const kg = toKg(edge.node?.variant?.inventoryItem?.measurement?.weight);
+          if (kg != null) lineItemWeightsKg[edge.node.id] = kg;
+        }
       } catch (err) {
         logger.warn({ err: err.message, returnId: returnRecord.id }, 'Address lookup failed — using stored fallbacks');
       }
@@ -404,7 +425,27 @@ class LabelService {
       recipient: !settings.warehouseLine1 && !storeAddress?.address1,
     };
 
-    return { senderAddress, recipientAddress, missing };
+    return { senderAddress, recipientAddress, missing, lineItemWeightsKg };
+  }
+
+  /**
+   * The parcel to book: each unit's weight from its Shopify variant when
+   * known, else the merchant's default per-unit weight, else 0.5 kg; the
+   * box size from the merchant's settings, else 30 x 20 x 10 cm.
+   */
+  static parcelFor(shop, returnRecord, lineItemWeightsKg = {}) {
+    const settings = shop.settings || {};
+    const defaultUnitKg = positive(settings.parcelDefaultWeightKg) || 0.5;
+    const weight = returnRecord.items.reduce((sum, item) => {
+      const unit = lineItemWeightsKg[item.shopifyLineItemId];
+      return sum + item.quantity * (unit != null && unit > 0 ? unit : defaultUnitKg);
+    }, 0);
+    const dimensions = {
+      length: positive(settings.parcelLengthCm) || 30,
+      width: positive(settings.parcelWidthCm) || 20,
+      height: positive(settings.parcelHeightCm) || 10,
+    };
+    return { weight: Math.round(Math.max(0.1, weight) * 1000) / 1000, dimensions };
   }
 
   /**

@@ -133,6 +133,7 @@ router.post('/shop/update', async (req, res) => {
       data: {
         name: shopData.name,
         email: shopData.email,
+        ...(shopData.currency ? { currency: shopData.currency } : {}),
       },
     });
   } catch (err) {

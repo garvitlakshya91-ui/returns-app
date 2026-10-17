@@ -50,6 +50,7 @@ const prismaMockFactory = () => ({
   },
   returnEvent: {
     updateMany: jest.fn(),
+    findMany: jest.fn(),
     create: jest.fn(),
     createMany: jest.fn(),
   },

@@ -100,6 +100,7 @@ async function installShopFromTokenExchange(shopDomain, sessionToken) {
           name
           email
           myshopifyDomain
+          currencyCode
         }
       }
     `);
@@ -112,12 +113,14 @@ async function installShopFromTokenExchange(shopDomain, sessionToken) {
         shopifyToken: storedToken,
         name: shopData.name,
         email: shopData.email,
+        ...(shopData.currencyCode ? { currency: shopData.currencyCode } : {}),
       },
       create: {
         shopifyDomain: shopDomain,
         shopifyToken: storedToken,
         name: shopData.name,
         email: shopData.email,
+        currency: shopData.currencyCode || 'GBP',
       },
     });
 

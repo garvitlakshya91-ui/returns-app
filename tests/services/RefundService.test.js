@@ -42,7 +42,11 @@ function ret(overrides = {}) {
 
 // Shopify responses, in the order the service asks for them.
 const noExisting = { data: { order: { refunds: [] } } };
-const existing = (id, note, amount) => ({ data: { order: { refunds: [{ id, note, totalRefundedSet: { shopMoney: { amount: String(amount) } } }] } } });
+const existing = (id, note, amount, lines = []) => ({ data: { order: { refunds: [{
+  id, note,
+  totalRefundedSet: { shopMoney: { amount: String(amount) } },
+  refundLineItems: { edges: lines.map((l) => ({ node: { subtotalSet: { shopMoney: { amount: l.subtotal } }, totalTaxSet: { shopMoney: { amount: l.tax } } } })) },
+}] } } });
 const suggested = ({ subtotal = '50.00', tax = '0.00', max = '50.00', transactions, currency = 'GBP' } = {}) => ({
   data: {
     order: {
@@ -178,12 +182,22 @@ describe('reconciliation — a refund that already exists on Shopify is never re
 
     // Second attempt (claim retaken): Shopify already has the refund.
     shopifyClient.request.mockReset();
-    shopifyClient.request.mockResolvedValueOnce(existing('gid://shopify/Refund/sc', 'ReturnFlow return #ret_test_1', 0));
+    shopifyClient.request.mockResolvedValueOnce(existing('gid://shopify/Refund/sc', 'ReturnFlow return #ret_test_1', 0, [{ subtotal: '50.00', tax: '0.00' }]));
     prisma.return.update.mockResolvedValue({});
     const result = await RefundService.processRefund('ret_test_1');
 
     expect(result).toMatchObject({ reconciled: true, shopifyRefundId: 'gid://shopify/Refund/sc' });
     expect(callQueries().some((q) => q.includes('refundCreate'))).toBe(false);
+  });
+
+  it('rebuilds the credited amount from the refund\'s line items when the cash total is zero and nothing was saved locally', async () => {
+    prisma.return.findUnique.mockResolvedValue(ret({ resolution: 'STORE_CREDIT', refundAmount: null, returnFee: 5 }));
+    shopifyClient.request.mockResolvedValueOnce(existing('gid://shopify/Refund/sc', 'ReturnFlow return #ret_test_1', 0, [{ subtotal: '40.00', tax: '8.00' }, { subtotal: '12.00', tax: '0.00' }]));
+
+    const result = await RefundService.processRefund('ret_test_1');
+
+    expect(result).toMatchObject({ reconciled: true, amount: 55 }); // 40 + 8 + 12 − 5 fee
+    expect(prisma.return.update.mock.calls[0][0].data.refundAmount).toBe(55);
   });
 });
 

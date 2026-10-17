@@ -16,6 +16,8 @@ const MANAGED_LABEL_BLOCKED_MESSAGE = 'No label was bought: managed labels need 
 const LABEL_NO_RETURNS_ADDRESS_MESSAGE = 'No label was bought: add your returns address in Settings '
   + '(Warehouse address), or set your store address in Shopify.';
 const LABEL_NO_CUSTOMER_ADDRESS_MESSAGE = 'No label was bought: this order has no shipping address to collect the return from.';
+// Shown to the merchant when they try to approve a return with nowhere to send it.
+const RETURNS_ADDRESS_REQUIRED_MESSAGE = 'Set your returns address before approving returns: Settings → Warehouse address.';
 
 // Aggregators (Shippo) report the carrier they actually booked, e.g. "Evri" or
 // "Royal Mail". Store it the way the rest of the app names carriers.
@@ -209,6 +211,27 @@ class LabelService {
   }
 
   /**
+   * Does the shop have somewhere for returns to go? The warehouse address in
+   * Settings, or failing that the store's own address on Shopify. Checked
+   * before a return is approved, so no return is approved that can never
+   * get a label.
+   */
+  static async hasReturnsAddress(shop) {
+    const settings = shop.settings || {};
+    if (settings.warehouseLine1 && settings.warehousePostcode) return true;
+    if (!shop.shopifyToken) return false;
+    try {
+      const client = await ShopToken.graphqlClient(shop);
+      const resp = await client.request('{ shop { billingAddress { address1 zip } } }');
+      const addr = resp.data?.shop?.billingAddress;
+      return Boolean(addr?.address1 && addr?.zip);
+    } catch (err) {
+      logger.warn({ shop: shop.shopifyDomain, err: err.message }, 'Could not check the store address');
+      return false;
+    }
+  }
+
+  /**
    * Real addresses for the label. The parcel travels customer → warehouse:
    *  - sender: the order's actual shipping address, fetched live from Shopify
    *  - recipient: the merchant's warehouse address from Settings, else the
@@ -386,5 +409,7 @@ class LabelService {
     }
   }
 }
+
+LabelService.RETURNS_ADDRESS_REQUIRED_MESSAGE = RETURNS_ADDRESS_REQUIRED_MESSAGE;
 
 module.exports = LabelService;

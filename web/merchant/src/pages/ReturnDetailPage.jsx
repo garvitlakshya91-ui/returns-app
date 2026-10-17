@@ -79,7 +79,13 @@ export default function ReturnDetailPage() {
       setBanner({ title: 'Return approved — label is being generated', tone: 'success' });
       loadReturn();
     } catch (err) {
-      setBanner({ title: `Approval failed: ${err.message}`, tone: 'critical' });
+      // No returns address yet: send the merchant straight to where it is set.
+      const needsAddress = /returns address/i.test(err.message || '');
+      setBanner({
+        title: needsAddress ? err.message : `Approval failed: ${err.message}`,
+        tone: needsAddress ? 'warning' : 'critical',
+        action: needsAddress ? { content: 'Set returns address', onAction: () => navigate('/settings') } : undefined,
+      });
     } finally {
       setActionLoading('');
     }
@@ -189,7 +195,7 @@ export default function ReturnDetailPage() {
       <Layout>
         {banner && (
           <Layout.Section>
-            <Banner tone={banner.tone} title={banner.title} onDismiss={() => setBanner(null)} />
+            <Banner tone={banner.tone} title={banner.title} action={banner.action} onDismiss={() => setBanner(null)} />
           </Layout.Section>
         )}
         {needsLabel && !banner && (

@@ -250,3 +250,43 @@ describe('PUT /api/admin/settings', () => {
     expect(prisma.shop.update).not.toHaveBeenCalled();
   });
 });
+
+describe('PUT /api/admin/settings — warehouse address validation', () => {
+  beforeEach(() => {
+    prisma.shop.findUnique.mockResolvedValue({ settings: {} });
+    prisma.shop.update.mockImplementation(async ({ data }) => fakeShop({ settings: data.settings }));
+  });
+
+  it('400 when the street line is missing', async () => {
+    const res = await request(app).put('/api/admin/settings').send({ settings: { warehouseLine1: '', warehousePostcode: 'B73 6SH' } });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: expect.stringMatching(/street address/), field: 'warehouseLine1' });
+    expect(prisma.shop.update).not.toHaveBeenCalled();
+  });
+
+  it('400 when the postcode is not a UK postcode', async () => {
+    for (const warehousePostcode of ['', '12345', 'B73', 'HELLO']) {
+      const res = await request(app).put('/api/admin/settings').send({ settings: { warehouseLine1: '188 Chester Road North', warehousePostcode } });
+      expect(res.status).toBe(400);
+      expect(res.body.field).toBe('warehousePostcode');
+    }
+    expect(prisma.shop.update).not.toHaveBeenCalled();
+  });
+
+  it('normalises a good address: trimmed, postcode upper-case with the space', async () => {
+    const res = await request(app).put('/api/admin/settings').send({
+      settings: { warehouseLine1: '  188 Chester Road North ', warehouseCity: ' Sutton Coldfield ', warehousePostcode: 'b736sh' },
+    });
+    expect(res.status).toBe(200);
+    expect(prisma.shop.update.mock.calls[0][0].data.settings).toEqual({
+      warehouseLine1: '188 Chester Road North', warehouseCity: 'Sutton Coldfield', warehousePostcode: 'B73 6SH',
+    });
+  });
+
+  it('allows clearing the address entirely, and leaves it alone when not sent', async () => {
+    let res = await request(app).put('/api/admin/settings').send({ settings: { warehouseLine1: '', warehouseCity: '', warehousePostcode: '' } });
+    expect(res.status).toBe(200);
+    res = await request(app).put('/api/admin/settings').send({ settings: { portalHeading: 'Returns' } });
+    expect(res.status).toBe(200);
+  });
+});

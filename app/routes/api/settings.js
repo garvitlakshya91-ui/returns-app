@@ -43,6 +43,29 @@ router.put('/', async (req, res) => {
     // dashboard snapshot can't wipe keys written since the page loaded.
     const current = await prisma.shop.findUnique({ where: { id: req.shopId }, select: { settings: true } });
     const merged = { ...(current?.settings || {}), ...incoming };
+
+    // The warehouse address is where every return label is sent. As it will
+    // be stored it must be either empty or a real street line plus a valid
+    // UK postcode; a half-filled address would produce unusable labels.
+    const touchesWarehouse = ['warehouseLine1', 'warehouseCity', 'warehousePostcode'].some((k) => k in incoming);
+    if (touchesWarehouse) {
+      const line1 = String(merged.warehouseLine1 || '').trim();
+      const postcode = String(merged.warehousePostcode || '').trim().toUpperCase();
+      const city = String(merged.warehouseCity || '').trim();
+      // Nothing set (or being cleared) is allowed; approvals are gated on it
+      // separately. Anything set must be complete and valid.
+      if (line1 || postcode) {
+        if (line1.length < 3) {
+          return res.status(400).json({ error: 'Warehouse address needs a street address (e.g. "188 Chester Road North")', field: 'warehouseLine1' });
+        }
+        if (!/^[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2}$/.test(postcode)) {
+          return res.status(400).json({ error: 'Warehouse postcode must be a valid UK postcode (e.g. "B73 6SH")', field: 'warehousePostcode' });
+        }
+        merged.warehouseLine1 = line1;
+        merged.warehouseCity = city;
+        merged.warehousePostcode = postcode.replace(/^(.+?)(\d[A-Z]{2})$/, '$1 $2').replace(/\s+/, ' ');
+      }
+    }
     for (const key of SYSTEM_KEYS) {
       if (current?.settings && current.settings[key] !== undefined) merged[key] = current.settings[key];
       else delete merged[key];

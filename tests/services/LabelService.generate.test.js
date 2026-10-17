@@ -853,3 +853,28 @@ describe('LabelService.generateLabel — live labels need real addresses and rec
     expect(prisma.returnLabel.update.mock.calls[0][0].data.carrier).toBe('royalmail');
   });
 });
+
+// ---------------------------------------------------------------------------
+describe('LabelService.hasReturnsAddress — the approval gate', () => {
+  it('true when the warehouse address is set in Settings, without asking Shopify', async () => {
+    load();
+    const ok = await LabelService.hasReturnsAddress(shopWith([], { settings: { warehouseLine1: '188 Chester Road North', warehousePostcode: 'B73 6SH' } }));
+    expect(ok).toBe(true);
+    expect(shopifyRequest).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the store address on Shopify', async () => {
+    load();
+    shopifyRequest.mockResolvedValue({ data: { shop: { billingAddress: { address1: '12 Warehouse Way', zip: 'M1 2AB' } } } });
+    expect(await LabelService.hasReturnsAddress(shopWith([], { settings: {} }))).toBe(true);
+  });
+
+  it('false when neither exists, when the store address is blank, or when Shopify cannot be reached', async () => {
+    load();
+    shopifyRequest.mockResolvedValue({ data: { shop: { billingAddress: { address1: null, zip: null } } } });
+    expect(await LabelService.hasReturnsAddress(shopWith([], { settings: {} }))).toBe(false);
+    shopifyRequest.mockRejectedValue(new Error('timeout'));
+    expect(await LabelService.hasReturnsAddress(shopWith([], { settings: {} }))).toBe(false);
+    expect(await LabelService.hasReturnsAddress({ settings: {}, shopifyToken: '' })).toBe(false);
+  });
+});

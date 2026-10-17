@@ -83,6 +83,16 @@ router.post('/bulk', async (req, res) => {
       return res.status(400).json({ error: 'action must be approve, reject or process' });
     }
 
+    // Same rule as single approval: nothing is approved until returns have
+    // somewhere to go.
+    if (action === 'approve') {
+      const LabelService = require('../../services/LabelService');
+      const shop = await prisma.shop.findUnique({ where: { id: req.shopId } });
+      if (!shop || !(await LabelService.hasReturnsAddress(shop))) {
+        return res.status(409).json({ error: LabelService.RETURNS_ADDRESS_REQUIRED_MESSAGE, code: 'RETURNS_ADDRESS_MISSING' });
+      }
+    }
+
     const eventBus = require('../../events/eventBus');
     const emitters = require('../../events/emitters');
     let success = 0;
@@ -214,6 +224,15 @@ router.put('/:id/approve', async (req, res) => {
 
     if (!returnRecord) {
       return res.status(404).json({ error: 'Return not found or not in REQUESTED status' });
+    }
+
+    // Approval buys a label, and a label needs somewhere to go. Refuse now,
+    // with a fix the merchant can act on, rather than approving a return
+    // that can never ship.
+    const LabelService = require('../../services/LabelService');
+    const shop = await prisma.shop.findUnique({ where: { id: req.shopId } });
+    if (!shop || !(await LabelService.hasReturnsAddress(shop))) {
+      return res.status(409).json({ error: LabelService.RETURNS_ADDRESS_REQUIRED_MESSAGE, code: 'RETURNS_ADDRESS_MISSING' });
     }
 
     const updated = await prisma.return.update({

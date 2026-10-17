@@ -5,6 +5,7 @@ const { installPrismaMock, fakeShop, fakeReturn } = require('../helpers');
 let app;
 let prisma;
 let eventBus;
+let labelService;
 
 beforeEach(() => {
   jest.resetModules();
@@ -24,6 +25,13 @@ beforeEach(() => {
   jest.doMock('../../app/services/RefundService', () => ({
     processRefund: jest.fn().mockResolvedValue({ success: true, type: 'REFUND', amount: 50 }),
   }));
+  // Approval checks the shop has a returns address (LabelService has its own tests)
+  labelService = {
+    hasReturnsAddress: jest.fn().mockResolvedValue(true),
+    RETURNS_ADDRESS_REQUIRED_MESSAGE: 'Set your returns address before approving returns: Settings → Warehouse address.',
+  };
+  jest.doMock('../../app/services/LabelService', () => labelService);
+  prisma.shop.findUnique.mockResolvedValue(fakeShop({ id: 'shop_test_1', settings: { warehouseLine1: '1 Dock Road', warehousePostcode: 'BS1 1AA' } }));
 
   app = express();
   app.use(express.json());
@@ -76,6 +84,19 @@ describe('PUT /api/admin/returns/:id/approve', () => {
     prisma.return.findFirst.mockResolvedValue(null);
     const res = await request(app).put('/api/admin/returns/r1/approve');
     expect(res.status).toBe(404);
+  });
+
+  it('409 with a fix when the shop has no returns address — nothing is approved', async () => {
+    labelService.hasReturnsAddress.mockResolvedValue(false);
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'REQUESTED' }));
+    const spy = jest.spyOn(eventBus, 'emit');
+
+    const res = await request(app).put('/api/admin/returns/r1/approve');
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: expect.stringMatching(/Settings → Warehouse address/), code: 'RETURNS_ADDRESS_MISSING' });
+    expect(prisma.return.update).not.toHaveBeenCalled();
+    expect(spy).not.toHaveBeenCalledWith('return.approved', expect.anything());
   });
 
   it('200 updates to APPROVED and emits event', async () => {
@@ -146,6 +167,23 @@ describe('POST /api/admin/returns/bulk', () => {
   it('400 on an invalid action', async () => {
     const res = await request(app).post('/api/admin/returns/bulk').send({ action: 'nuke', ids: ['r1'] });
     expect(res.status).toBe(400);
+  });
+
+  it('409 for a bulk approve when the shop has no returns address — none approved', async () => {
+    labelService.hasReturnsAddress.mockResolvedValue(false);
+    const res = await request(app).post('/api/admin/returns/bulk').send({ action: 'approve', ids: ['r1', 'r2'] });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('RETURNS_ADDRESS_MISSING');
+    expect(prisma.return.update).not.toHaveBeenCalled();
+  });
+
+  it('does not check the address for reject / process bulk actions', async () => {
+    labelService.hasReturnsAddress.mockResolvedValue(false);
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'REQUESTED' }));
+    prisma.return.update.mockResolvedValue(fakeReturn({ id: 'r1', status: 'REJECTED' }));
+    const res = await request(app).post('/api/admin/returns/bulk').send({ action: 'reject', ids: ['r1'], reason: 'x' });
+    expect(res.status).toBe(200);
+    expect(labelService.hasReturnsAddress).not.toHaveBeenCalled();
   });
 
   it('approves found returns and reports the rest as failed', async () => {

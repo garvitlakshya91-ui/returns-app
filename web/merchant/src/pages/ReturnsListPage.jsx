@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Page,
   Card,
+  Banner,
   IndexTable,
   Text,
   Filters,
@@ -35,6 +36,7 @@ export default function ReturnsListPage() {
   const [statusFilter, setStatusFilter] = useState([]);
   const [queryValue, setQueryValue] = useState('');
   const [bulkLoading, setBulkLoading] = useState(false);
+  const [bulkError, setBulkError] = useState('');
   const [demoLoading, setDemoLoading] = useState(false);
 
   const resourceName = { singular: 'return', plural: 'returns' };
@@ -63,12 +65,14 @@ export default function ReturnsListPage() {
   async function runBulk(action, reason) {
     if (!selectedResources.length) return;
     setBulkLoading(true);
+    setBulkError('');
     try {
       await returnsApi.bulk(action, selectedResources, reason);
       clearSelection();
       await loadReturns();
     } catch (err) {
       console.error('Bulk action error:', err);
+      setBulkError(err.message || 'Bulk action failed');
     } finally {
       setBulkLoading(false);
     }
@@ -143,6 +147,16 @@ export default function ReturnsListPage() {
       fullWidth
       primaryAction={{ content: 'Create test return', onAction: handleDemo, loading: demoLoading }}
     >
+      {bulkError && (
+        <div style={{ marginBottom: '16px' }}>
+          <Banner
+            tone={/returns address/i.test(bulkError) ? 'warning' : 'critical'}
+            title={bulkError}
+            action={/returns address/i.test(bulkError) ? { content: 'Set returns address', onAction: () => navigate('/settings') } : undefined}
+            onDismiss={() => setBulkError('')}
+          />
+        </div>
+      )}
       <Card padding="0">
         <Filters
           queryValue={queryValue}

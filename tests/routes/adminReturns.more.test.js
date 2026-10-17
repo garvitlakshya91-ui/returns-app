@@ -35,6 +35,13 @@ beforeEach(() => {
   // Keep the route's console.error noise out of the test output
   jest.spyOn(console, 'error').mockImplementation(() => {});
 
+  // Approval is gated on a returns address; the gate itself is tested in LabelService.
+  jest.doMock('../../app/services/LabelService', () => ({
+    hasReturnsAddress: jest.fn().mockResolvedValue(true),
+    RETURNS_ADDRESS_REQUIRED_MESSAGE: 'Set your returns address before approving returns: Settings → Warehouse address.',
+  }));
+  prisma.shop.findUnique.mockResolvedValue(fakeShop({ id: 'shop_test_1' }));
+
   app = express();
   app.use(express.json());
   app.use('/api/admin/returns', require('../../app/routes/api/returns'));

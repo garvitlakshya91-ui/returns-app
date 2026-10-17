@@ -75,12 +75,11 @@ async function appApi(path, { method = 'GET', body, admin = false } = {}) {
   return json;
 }
 
-(async () => {
-  const shop = await prisma.shop.findUnique({ where: { shopifyDomain: SHOP_DOMAIN } });
-  if (!shop?.shopifyToken) throw new Error(`No token stored for ${SHOP_DOMAIN} — open the app in Shopify admin first`);
-  const accessToken = await ShopToken.getAccessToken(shop);
-  console.log('[1] Access token OK');
-
+/**
+ * Steps 2-6: pick a product, create (or reuse) a paid order, find it through
+ * the portal, open a return and approve it. Returns the order and return.
+ */
+async function openReturn(accessToken) {
   const prod = await adminGql(accessToken, `
     { shop { currencyCode }
       products(first: 20, query: "status:active") { edges { node {
@@ -167,18 +166,42 @@ async function appApi(path, { method = 'GET', body, admin = false } = {}) {
 
   await appApi(`/api/admin/returns/${ret.id}/approve`, { method: 'PUT', admin: true });
   console.log('[6] Approved — waiting for label job...');
+  return { order, ret };
+}
+
+(async () => {
+  const shop = await prisma.shop.findUnique({ where: { shopifyDomain: SHOP_DOMAIN } });
+  if (!shop?.shopifyToken) throw new Error(`No token stored for ${SHOP_DOMAIN} — open the app in Shopify admin first`);
+  const accessToken = await ShopToken.getAccessToken(shop);
+  console.log('[1] Access token OK');
+
+  // A rehearsal that fails after the label is bought leaves a real label
+  // hanging. E2E_RESUME_RETURN=<returnId> picks that return up again from
+  // step 7 instead of creating (and paying for) another.
+  let order;
+  let ret;
+  if (process.env.E2E_RESUME_RETURN) {
+    const d = await appApi(`/api/admin/returns/${process.env.E2E_RESUME_RETURN}`, { admin: true });
+    ret = { id: d.id, status: d.status };
+    order = { id: d.shopifyOrderId, name: d.shopifyOrderName };
+    console.log(`[2-6] Resuming return ${ret.id} on order ${order.name} (status ${d.status})`);
+  } else {
+    ({ order, ret } = await openReturn(accessToken));
+  }
   // Wait for a FINISHED label (the row exists as a lock before postage is
   // bought), so the refund below runs after the label, as a merchant would.
+  // The label row is saved a moment before the return's status moves on,
+  // so wait for both: a finished label AND the return at LABEL_SENT.
   let detail = null;
   for (let i = 0; i < 30; i++) {
     await sleep(3000);
     detail = await appApi(`/api/admin/returns/${ret.id}`, { admin: true });
-    if (detail.label?.status === 'created') break;
+    if (detail.label?.status === 'created' && detail.status === 'LABEL_SENT') break;
     const failure = (detail.events || []).find((e) => e.type === 'label.failed');
     if (failure) throw new Error(`Label failed: ${failure.data?.error}`);
   }
   if (detail?.label?.status !== 'created') throw new Error(`No finished label after 90s (status ${detail?.status}, label ${detail?.label?.status || 'none'})`);
-  if (detail.status !== 'LABEL_SENT') throw new Error(`Expected LABEL_SENT after the label, got ${detail.status}`);
+  if (detail.status !== 'LABEL_SENT') throw new Error(`Label finished but the return stayed ${detail.status} instead of LABEL_SENT`);
   const simulated = !detail.label.labelUrl;
   console.log(`[7] Label: carrier=${detail.label.carrier} tracking=${detail.label.trackingCode} cost=${detail.label.cost}`);
   console.log(`    labelUrl=${detail.label.labelUrl || '(none — SIMULATED: no carrier key on the server)'}`);

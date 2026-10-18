@@ -91,7 +91,7 @@ describe('sendEmail — direct path through the real emailRenderer', () => {
     const resend = installResendMock();
     const NS = load();
     const out = await NS.sendEmail({ to: 'jane@x.com', subject: 'Hi', template: 'GenericFallback', data: { k: 1 } });
-    expect(out).toEqual({ sent: true, to: 'jane@x.com', subject: 'Hi' });
+    expect(out).toEqual({ sent: true, to: 'jane@x.com', subject: 'Hi', id: 'msg_test' });
     expect(resend.send).toHaveBeenCalledTimes(1);
     const payload = resend.send.mock.calls[0][0];
     expect(payload.from).toBe('ReturnFlow <onboarding@resend.dev>');

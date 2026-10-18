@@ -124,7 +124,8 @@ function installStripeMock() {
 }
 
 function installResendMock() {
-  const sendMock = jest.fn().mockResolvedValue({ id: 'msg_test' });
+  // The real SDK resolves to { data, error } and does not throw on refusal.
+  const sendMock = jest.fn().mockResolvedValue({ data: { id: 'msg_test' }, error: null });
   jest.doMock('resend', () => ({
     Resend: jest.fn().mockImplementation(() => ({
       emails: { send: sendMock },

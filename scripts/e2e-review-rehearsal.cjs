@@ -28,7 +28,8 @@ const SHOP_SLUG = SHOP_DOMAIN.replace('.myshopify.com', '');
 const APP_URL = (process.env.E2E_APP_URL || 'https://app.returnsflow.uk').replace(/\/$/, '');
 const API_VERSION = '2026-04';
 const CUSTOMER = {
-  email: 'jane.e2e@example.com',
+  // Set E2E_CUSTOMER_EMAIL to a real inbox to check the customer emails arrive.
+  email: process.env.E2E_CUSTOMER_EMAIL || 'jane.e2e@example.com',
   firstName: 'Jane',
   lastName: 'Reviewer',
   address: { address1: "1 St Peter's Square", city: 'Manchester', zip: 'M2 3AE', countryCode: 'GB' },

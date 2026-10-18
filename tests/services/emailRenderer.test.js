@@ -284,7 +284,7 @@ describe('sendEmailNow', () => {
     expect(payload).toMatchObject({ from: 'ReturnFlow <onboarding@resend.dev>', to: 'jane@example.com', subject: 'Your label' });
     expect(payload.html).toContain('<strong>#42</strong>');
     expect(payload.html).toContain('Your return label is ready');
-    expect(out).toEqual({ sent: true, to: 'jane@example.com', subject: 'Your label' });
+    expect(out).toEqual({ sent: true, to: 'jane@example.com', subject: 'Your label', id: 'msg_test' });
   });
 
   it('honours RESEND_FROM as the sender', async () => {
@@ -298,6 +298,24 @@ describe('sendEmailNow', () => {
     process.env.RESEND_API_KEY = 're_test_123';
     resend.send.mockRejectedValueOnce(new Error('rate limited'));
     await expect(sendEmailNow(msg)).rejects.toThrow('rate limited');
+  });
+
+  // The SDK does NOT throw when Resend refuses an email: it resolves with
+  // { data: null, error }. That must count as a failure, never as "sent".
+  it.each([
+    ['daily quota', { name: 'daily_quota_exceeded', message: 'You have reached your daily email sending quota.' }],
+    ['rate limit', { name: 'rate_limit_exceeded', message: 'Too many requests.' }],
+    ['unverified domain', { name: 'validation_error', message: 'The returnsflow.uk domain is not verified.' }],
+  ])('a refusal returned as { error } (%s) throws, so the worker retries and it is logged', async (_label, error) => {
+    process.env.RESEND_API_KEY = 're_test_123';
+    resend.send.mockResolvedValueOnce({ data: null, error });
+    await expect(sendEmailNow(msg)).rejects.toMatchObject({ message: `Resend refused the email: ${error.message}`, code: error.name });
+  });
+
+  it('a response with no message id is not treated as sent', async () => {
+    process.env.RESEND_API_KEY = 're_test_123';
+    resend.send.mockResolvedValueOnce({ data: null, error: null });
+    await expect(sendEmailNow(msg)).rejects.toThrow('Resend returned no message id');
   });
 
   it('sends the generic fallback markup for unknown templates rather than failing', async () => {

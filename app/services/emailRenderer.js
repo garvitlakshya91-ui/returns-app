@@ -47,12 +47,23 @@ async function sendEmailNow({ to, subject, template, data }) {
     const { Resend } = require('resend');
     const resend = new Resend(process.env.RESEND_API_KEY);
     const from = process.env.RESEND_FROM || 'ReturnFlow <onboarding@resend.dev>';
-    await resend.emails.send({ from, to, subject, html });
-    logger.info({ to, subject, template, from }, 'Email sent via Resend');
-  } else {
-    logger.info({ to, subject, template }, '[Email] dev mode — no RESEND_API_KEY, skipping send');
+    // The Resend SDK does not throw when it refuses an email (quota, rate
+    // limit, unverified domain, bad address): it returns { data, error }.
+    // Treat a refusal as a failure so the worker retries and it is logged,
+    // instead of reporting an email as sent that never left.
+    const { data: sentData, error } = (await resend.emails.send({ from, to, subject, html })) || {};
+    if (error || !sentData?.id) {
+      const reason = error?.message || error?.name || 'Resend returned no message id';
+      logger.error({ to, subject, template, from, error: error || null }, 'Resend refused the email');
+      const err = new Error(`Resend refused the email: ${reason}`);
+      err.code = error?.name || 'RESEND_REFUSED';
+      throw err;
+    }
+    logger.info({ to, subject, template, from, id: sentData.id }, 'Email sent via Resend');
+    return { sent: true, to, subject, id: sentData.id };
   }
 
+  logger.info({ to, subject, template }, '[Email] dev mode — no RESEND_API_KEY, skipping send');
   return { sent: true, to, subject };
 }
 

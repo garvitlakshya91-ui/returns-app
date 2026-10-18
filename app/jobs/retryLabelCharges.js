@@ -92,11 +92,15 @@ async function retryFailedLabelCharges({ now = new Date() } = {}) {
   return { due: due.length, recovered, stillFailing };
 }
 
-/** Run the retry on boot and every six hours after. */
+/** Run the retry on boot and every six hours after. Registering twice is a no-op. */
+let started = false;
 function startLabelChargeRetries() {
+  if (started) return false;
+  started = true;
   const run = () => retryFailedLabelCharges().catch((err) => logger.error({ err }, 'Label charge retry failed'));
   setTimeout(run, 15000).unref();
   setInterval(run, 6 * 60 * 60 * 1000).unref();
+  return true;
 }
 
 module.exports = { retryFailedLabelCharges, startLabelChargeRetries, MAX_ATTEMPTS, LOOKBACK_DAYS };

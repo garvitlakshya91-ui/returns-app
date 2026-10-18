@@ -294,7 +294,7 @@ if (process.env.REDIS_URL) {
   }, 5000);
   // Retry managed-label charges that did not go through (on boot, then 6-hourly)
   require('./jobs/retryLabelCharges').startLabelChargeRetries();
-  require('./jobs/recoverLabels').startLabelRecovery();
+  // Finish labels whose follow-up steps stalled (on boot, then every 30 min)
   require('./jobs/recoverLabels').startLabelRecovery();
 }
 

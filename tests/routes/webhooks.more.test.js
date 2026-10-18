@@ -307,12 +307,12 @@ describe('orders/fulfilled', () => {
     expect(ts).toBeLessThanOrEqual(Date.now());
   });
 
-  it('swallows a DB failure and still returns 200 (Shopify must not retry forever)', async () => {
+  it('a DB failure answers 500 so Shopify retries (the work was not done)', async () => {
     prisma.shop.findUnique.mockRejectedValue(new Error('db down'));
     const body = JSON.stringify({ id: 4, name: '#4' });
     const res = await post('/orders/fulfilled', body);
     await tick();
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(500);
     expect(logger.error).toHaveBeenCalledWith(expect.objectContaining({ err: expect.any(Error) }), 'orders/fulfilled error');
   });
 });
@@ -374,11 +374,11 @@ describe('shop/update', () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
-  it('swallows a DB failure and still returns 200', async () => {
+  it('a DB failure answers 500 so Shopify retries', async () => {
     prisma.shop.updateMany.mockRejectedValue(new Error('db down'));
     const res = await post('/shop/update', JSON.stringify({ name: 'X', email: 'x@x.com' }));
     await tick();
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(500);
     expect(logger.error).toHaveBeenCalledWith(expect.objectContaining({ err: expect.any(Error) }), 'shop/update error');
   });
 });
@@ -464,12 +464,31 @@ describe('app_subscriptions/update → plan reconciliation', () => {
     expect(prisma.shop.update).toHaveBeenCalledWith(expect.objectContaining({ data: { plan: 'FREE' } }));
   });
 
-  it('swallows a billing-service failure and still returns 200', async () => {
+  it('a failure to apply the change answers 500 (not 200), so a cancellation is never silently lost', async () => {
     prisma.shop.findUnique.mockRejectedValue(new Error('db down'));
-    const res = await post('/app_subscriptions/update', subBody('Growth', 'ACTIVE'));
+    const res = await post('/app_subscriptions/update', subBody('Growth', 'CANCELLED'));
     await tick();
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(500);
     expect(logger.error).toHaveBeenCalledWith(expect.objectContaining({ err: expect.any(Error) }), 'app_subscriptions/update error');
+  });
+
+  it('the failed delivery gives its idempotency claim back, so Shopify\'s retry is processed instead of dropped', async () => {
+    fakeRedis = makeFakeRedis();
+    prisma.shop.findUnique.mockRejectedValueOnce(new Error('db down'));
+    const first = await post('/app_subscriptions/update', subBody('Growth', 'CANCELLED'), { webhookId: 'wh-sub-1' });
+    await tick();
+    expect(first.status).toBe(500);
+    expect(fakeRedis.store.has('idem:shopify:wh-sub-1')).toBe(false); // released, not marked done
+    expect(prisma.shop.update).not.toHaveBeenCalled();
+
+    prisma.shop.findUnique.mockResolvedValue(fakeShop({ id: 'shop_1', plan: 'GROWTH' }));
+    prisma.shop.update.mockResolvedValue({});
+    const retry = await post('/app_subscriptions/update', subBody('Growth', 'CANCELLED'), { webhookId: 'wh-sub-1' });
+    await tick();
+    expect(retry.status).toBe(200);
+    expect(retry.text).toBe('OK'); // processed, not "duplicate"
+    expect(prisma.shop.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ plan: 'FREE' }) }));
+    expect(fakeRedis.store.get('idem:shopify:wh-sub-1')).toBe('done');
   });
 });
 
@@ -583,7 +602,7 @@ describe('GDPR compliance webhooks', () => {
     expect(res.status).toBe(500);
     expect(logger.error).toHaveBeenCalledWith(
       expect.objectContaining({ err: expect.any(Error), topic: 'shop/redact' }),
-      expect.stringMatching(/asking Shopify to retry/),
+      'shop/redact error',
     );
   });
 });

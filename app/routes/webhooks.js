@@ -65,117 +65,99 @@ router.use(async (req, res, next) => {
 });
 
 // ─── Order sync ───
+//
+// Every handler below takes the parsed payload and the request, does its
+// work, and only then is Shopify answered (see runWebhook): a failure gets a
+// 500 and the delivery's idempotency claim back, so the retry is processed
+// instead of being dropped as a duplicate.
 
-router.post('/orders/create', async (req, res) => {
-  res.status(200).send('OK');
-  try {
-    const shopDomain = req.headers['x-shopify-shop-domain'];
-    const orderData = JSON.parse(req.rawBody);
-    logger.info({ shop: shopDomain, order: orderData.name }, 'Order created webhook');
-    // Orders are fetched on-demand via portal lookup; no sync needed.
-  } catch (err) {
-    logger.error({ err }, 'orders/create error');
-  }
-});
+async function handleOrdersCreate(orderData, req) {
+  const shopDomain = req.headers['x-shopify-shop-domain'];
+  logger.info({ shop: shopDomain, order: orderData.name }, 'Order created webhook');
+  // Orders are fetched on-demand via portal lookup; no sync needed.
+}
 
-router.post('/orders/fulfilled', async (req, res) => {
-  res.status(200).send('OK');
-  try {
-    const shopDomain = req.headers['x-shopify-shop-domain'];
-    const order = JSON.parse(req.rawBody);
+async function handleOrdersFulfilled(order, req) {
+  const shopDomain = req.headers['x-shopify-shop-domain'];
+  const shop = await prisma.shop.findUnique({ where: { shopifyDomain: shopDomain } });
+  if (!shop) return;
 
-    const shop = await prisma.shop.findUnique({ where: { shopifyDomain: shopDomain } });
-    if (!shop) return;
+  // Record fulfillment date in shop settings for return window calculations
+  const fulfilledAt = order.fulfillments?.[0]?.created_at || new Date().toISOString();
+  const currentSettings = shop.settings || {};
+  const fulfillments = currentSettings.fulfillments || {};
+  fulfillments[order.id] = fulfilledAt;
 
-    // Record fulfillment date in shop settings for return window calculations
-    const fulfilledAt = order.fulfillments?.[0]?.created_at || new Date().toISOString();
-    const currentSettings = shop.settings || {};
-    const fulfillments = currentSettings.fulfillments || {};
-    fulfillments[order.id] = fulfilledAt;
+  await prisma.shop.update({
+    where: { id: shop.id },
+    data: {
+      settings: { ...currentSettings, fulfillments },
+    },
+  });
 
-    await prisma.shop.update({
-      where: { id: shop.id },
-      data: {
-        settings: { ...currentSettings, fulfillments },
-      },
-    });
+  logger.info({ shop: shopDomain, order: order.name }, 'Order fulfilled — return window started');
+}
 
-    logger.info({ shop: shopDomain, order: order.name }, 'Order fulfilled — return window started');
-  } catch (err) {
-    logger.error({ err }, 'orders/fulfilled error');
-  }
-});
+router.post('/orders/create', (req, res) => runWebhook(req, res, 'orders/create', handleOrdersCreate));
+router.post('/orders/fulfilled', (req, res) => runWebhook(req, res, 'orders/fulfilled', handleOrdersFulfilled));
 
 // ─── App lifecycle ───
 
-router.post('/app/uninstalled', async (req, res) => {
-  res.status(200).send('OK');
-  try {
-    const shopDomain = req.headers['x-shopify-shop-domain'];
-    const shop = await prisma.shop.findUnique({ where: { shopifyDomain: shopDomain } });
-    if (!shop) return;
+async function handleAppUninstalled(payload, req) {
+  const shopDomain = req.headers['x-shopify-shop-domain'];
+  const shop = await prisma.shop.findUnique({ where: { shopifyDomain: shopDomain } });
+  if (!shop) return;
 
-    await prisma.shop.update({
-      where: { id: shop.id },
-      data: {
-        shopifyToken: '',
-        // Shopify cancels the subscription on uninstall. Dropping to FREE here
-        // means a reinstall must request charge approval again (App Store
-        // requirement 1.2.2) instead of resuming a paid plan nobody pays for.
-        plan: 'FREE',
-        // Keep the merchant's configuration (branding, warehouse address,
-        // fulfilment dates) so a reinstall picks up where they left off;
-        // shop/redact wipes it for real 48h later if they don't come back.
-        settings: { ...(shop.settings || {}), uninstalledAt: new Date().toISOString() },
-      },
-    });
+  await prisma.shop.update({
+    where: { id: shop.id },
+    data: {
+      shopifyToken: '',
+      // Shopify cancels the subscription on uninstall. Dropping to FREE here
+      // means a reinstall must request charge approval again (App Store
+      // requirement 1.2.2) instead of resuming a paid plan nobody pays for.
+      plan: 'FREE',
+      // Keep the merchant's configuration (branding, warehouse address,
+      // fulfilment dates) so a reinstall picks up where they left off;
+      // shop/redact wipes it for real 48h later if they don't come back.
+      settings: { ...(shop.settings || {}), uninstalledAt: new Date().toISOString() },
+    },
+  });
 
-    eventBus.emit(SHOP_UNINSTALLED, { shopId: shop.id, shopDomain });
-    logger.info({ shop: shopDomain }, 'App uninstalled');
-  } catch (err) {
-    logger.error({ err }, 'app/uninstalled error');
-  }
-});
+  eventBus.emit(SHOP_UNINSTALLED, { shopId: shop.id, shopDomain });
+  logger.info({ shop: shopDomain }, 'App uninstalled');
+}
 
-router.post('/shop/update', async (req, res) => {
-  res.status(200).send('OK');
-  try {
-    const shopDomain = req.headers['x-shopify-shop-domain'];
-    const shopData = JSON.parse(req.rawBody);
-
-    await prisma.shop.updateMany({
-      where: { shopifyDomain: shopDomain },
-      data: {
-        name: shopData.name,
-        email: shopData.email,
-        ...(shopData.currency ? { currency: shopData.currency } : {}),
-      },
-    });
-  } catch (err) {
-    logger.error({ err }, 'shop/update error');
-  }
-});
+async function handleShopUpdate(shopData, req) {
+  const shopDomain = req.headers['x-shopify-shop-domain'];
+  await prisma.shop.updateMany({
+    where: { shopifyDomain: shopDomain },
+    data: {
+      name: shopData.name,
+      email: shopData.email,
+      ...(shopData.currency ? { currency: shopData.currency } : {}),
+    },
+  });
+}
 
 /**
- * POST /webhooks/app_subscriptions/update
- * Fires whenever a subscription's status changes — including merchant-initiated
- * cancellations and declined charges done from Shopify's side. Keeps the local
- * plan in sync so downgrades/cancels never require support or a reinstall.
+ * app_subscriptions/update fires whenever a subscription's status changes —
+ * including merchant-initiated cancellations and declined charges done from
+ * Shopify's side. Keeps the local plan in sync so downgrades/cancels never
+ * require support or a reinstall. A cancellation that fails to apply must
+ * not be acknowledged, or the merchant keeps a plan nobody pays for.
  */
-router.post('/app_subscriptions/update', async (req, res) => {
-  res.status(200).send('OK');
-  try {
-    const shopDomain = req.headers['x-shopify-shop-domain'];
-    const payload = JSON.parse(req.rawBody);
-    const sub = payload.app_subscription || {};
-    await BillingService.applySubscriptionStatus(shopDomain, {
-      name: sub.name,
-      status: sub.status,
-    });
-  } catch (err) {
-    logger.error({ err }, 'app_subscriptions/update error');
-  }
-});
+async function handleSubscriptionUpdate(payload, req) {
+  const shopDomain = req.headers['x-shopify-shop-domain'];
+  const sub = payload.app_subscription || {};
+  await BillingService.applySubscriptionStatus(shopDomain, {
+    name: sub.name,
+    status: sub.status,
+  });
+}
+
+router.post('/app/uninstalled', (req, res) => runWebhook(req, res, 'app/uninstalled', handleAppUninstalled));
+router.post('/shop/update', (req, res) => runWebhook(req, res, 'shop/update', handleShopUpdate));
+router.post('/app_subscriptions/update', (req, res) => runWebhook(req, res, 'app_subscriptions/update', handleSubscriptionUpdate));
 
 // ─── GDPR mandatory webhooks (required for App Store) ───
 //
@@ -228,29 +210,31 @@ async function handleCustomerDataRequest(payload) {
 }
 
 /**
- * Compliance work is acknowledged only once it has been done. A failure
- * answers 500 and gives the delivery's idempotency key back, so Shopify's
- * retry is processed instead of being dropped as a duplicate.
+ * Webhook work is acknowledged only once it has been done. A failure answers
+ * 500 and gives the delivery's idempotency key back, so Shopify's retry is
+ * processed instead of being dropped as a duplicate. (Shopify allows a few
+ * seconds per delivery; every handler here is a handful of database writes.)
  */
-async function runCompliance(req, res, topic, handler) {
+async function runWebhook(req, res, topic, handler) {
   // A body that is not JSON will never become valid on retry: log it and
   // acknowledge, so Shopify does not keep resending it.
   let payload;
   try {
     payload = JSON.parse(req.rawBody);
   } catch (err) {
-    logger.error({ err, topic }, 'Compliance webhook body is not JSON');
+    logger.error({ err, topic }, 'Webhook body is not JSON');
     return res.status(200).send('OK');
   }
   try {
-    await handler(payload);
+    await handler(payload, req);
     res.status(200).send('OK');
   } catch (err) {
-    logger.error({ err, topic }, 'Compliance webhook failed; asking Shopify to retry');
+    logger.error({ err, topic }, `${topic} error`);
     await release(`shopify:${req.headers['x-shopify-webhook-id']}`);
     res.status(500).send('Retry');
   }
 }
+const runCompliance = runWebhook;
 
 router.post('/customers/data_request', (req, res) => runCompliance(req, res, 'customers/data_request', handleCustomerDataRequest));
 

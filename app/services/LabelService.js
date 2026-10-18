@@ -5,6 +5,7 @@ const { decrypt } = require('../utils/encryption');
 const StorageService = require('./StorageService');
 const ShopToken = require('./ShopToken');
 const logger = require('../utils/logger');
+const { claim, release } = require('../utils/idempotency');
 
 // Same guard RefundService uses: only real Shopify order gids can be looked
 // up on the API. Demo/legacy returns skip the order fetch.
@@ -29,6 +30,9 @@ function positive(v) {
 }
 
 // A lock row older than this is from a crashed attempt, not a live one.
+// How long one attempt holds the right to send a label's email.
+const EMAIL_CLAIM_SECONDS = 5 * 60;
+
 // Timeline events that record how far a label's follow-up steps got.
 const LABEL_LEDGER_TYPES = ['label.charge_due', 'label.charged', 'label.charge_failed', 'label.emailed'];
 
@@ -312,25 +316,43 @@ class LabelService {
       }
     }
 
-    // Email the customer their label, once.
+    // Email the customer their label, once. Two recoveries running at the
+    // same time (merchant click + scheduled job) both see no 'label.emailed'
+    // yet, so the send is behind an atomic claim and the ledger is re-read
+    // after winning it; the loser leaves the label 'saved' for the winner.
     let emailed = has('label.emailed');
     if (!emailed) {
-      const NotificationService = require('./NotificationService');
-      let sent = null;
-      try {
-        sent = await NotificationService.sendLabelReady(returnRecord, label);
-      } catch (err) {
-        logger.warn({ returnId, err: err.message }, 'Label email failed');
+      const emailClaim = `label-email:${returnId}`;
+      if (!(await claim(emailClaim, EMAIL_CLAIM_SECONDS))) {
+        logger.info({ returnId }, 'Another attempt is emailing this label; leaving it to that one');
+        return label;
       }
-      if (sent) {
-        await prisma.returnEvent.create({
-          data: { returnId, type: 'label.emailed', actor: 'system', data: { to: returnRecord.customerEmail } },
-        }).catch((err) => logger.warn({ returnId, err: err.message }, 'Could not record label email'));
-        emailed = true;
-      } else {
-        // Stay 'saved': the next attempt (approve retry, merchant's
-        // "generate label") sends the email instead of skipping it.
-        logger.warn({ returnId }, 'Label email not sent; label kept as saved so it is sent on the next attempt');
+      try {
+        const already = await prisma.returnEvent.findFirst({ where: { returnId, type: 'label.emailed' } });
+        if (already) {
+          emailed = true;
+        } else {
+          const NotificationService = require('./NotificationService');
+          let sent = null;
+          try {
+            sent = await NotificationService.sendLabelReady(returnRecord, label);
+          } catch (err) {
+            logger.warn({ returnId, err: err.message }, 'Label email failed');
+          }
+          if (sent) {
+            await prisma.returnEvent.create({
+              data: { returnId, type: 'label.emailed', actor: 'system', data: { to: returnRecord.customerEmail } },
+            }).catch((err) => logger.warn({ returnId, err: err.message }, 'Could not record label email'));
+            emailed = true;
+          } else {
+            // Stay 'saved': the next attempt (approve retry, merchant's
+            // "Finish label", the recovery job) sends the email instead of
+            // skipping it.
+            logger.warn({ returnId }, 'Label email not sent; label kept as saved so it is sent on the next attempt');
+          }
+        }
+      } finally {
+        await release(emailClaim);
       }
     }
     if (!emailed) return label;

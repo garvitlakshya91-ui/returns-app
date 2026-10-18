@@ -17,6 +17,7 @@ let shopifyRequest;
 let storage;
 let billing;
 let notification;
+let idem;
 let qrcode;
 const savedEnv = {};
 const ENV_KEYS = ['R2_ACCOUNT_ID', 'R2_PUBLIC_URL', 'SHIPPO_API_KEY', 'SHIPENGINE_API_KEY', 'SHIPENGINE_CARRIER_ID'];
@@ -67,6 +68,7 @@ function installMocks() {
   prisma.returnLabel.delete = jest.fn().mockResolvedValue({});
   prisma.returnEvent.create = jest.fn().mockResolvedValue({});
   prisma.returnEvent.findMany = jest.fn().mockResolvedValue([]); // the label's step ledger
+  prisma.returnEvent.findFirst = jest.fn().mockResolvedValue(null); // re-read of the ledger after the email claim
   prisma.return.update = jest.fn().mockResolvedValue({});
   // The status move is conditional (APPROVED only), so it is an updateMany.
   prisma.return.updateMany = jest.fn().mockResolvedValue({ count: 1 });
@@ -92,6 +94,10 @@ function installMocks() {
 
   notification = { sendLabelReady: jest.fn().mockResolvedValue({ id: 'msg_label' }) };
   jest.doMock('../../app/services/NotificationService', () => notification);
+
+  // The label email is sent behind an atomic claim (two recoveries at once).
+  idem = { claim: jest.fn().mockResolvedValue(true), release: jest.fn().mockResolvedValue(undefined) };
+  jest.doMock('../../app/utils/idempotency', () => idem);
 }
 
 function load() {
@@ -857,6 +863,42 @@ describe('LabelService.generateLabel — the steps after a saved label are resum
     await LabelService.generateLabel('ret_lbl_1');
     expect(billing.recordLabelCharge).not.toHaveBeenCalled();
     expect(eventTypes()).toEqual(['label.emailed']);
+  });
+
+  it('the email is sent behind an atomic claim that is released afterwards', async () => {
+    primeReturn({ label: savedLabel() });
+    load();
+    await LabelService.generateLabel('ret_lbl_1');
+    expect(idem.claim).toHaveBeenCalledWith('label-email:ret_lbl_1', 300);
+    expect(idem.release).toHaveBeenCalledWith('label-email:ret_lbl_1');
+    expect(notification.sendLabelReady).toHaveBeenCalledTimes(1);
+  });
+
+  it('two recoveries at once: the one that loses the claim sends nothing and leaves the label "saved" to the winner', async () => {
+    idem.claim.mockResolvedValue(false);
+    primeReturn({ label: savedLabel() });
+    load();
+
+    const label = await LabelService.generateLabel('ret_lbl_1');
+
+    expect(notification.sendLabelReady).not.toHaveBeenCalled();
+    expect(prisma.returnEvent.create).not.toHaveBeenCalled();
+    expect(prisma.returnLabel.update).not.toHaveBeenCalled();
+    expect(idem.release).not.toHaveBeenCalled(); // not ours to release
+    expect(label.status).toBe('saved');
+  });
+
+  it('after winning the claim the ledger is re-read: an email recorded meanwhile is not sent again', async () => {
+    prisma.returnEvent.findFirst.mockResolvedValue({ type: 'label.emailed' });
+    primeReturn({ label: savedLabel() });
+    load();
+
+    const label = await LabelService.generateLabel('ret_lbl_1');
+
+    expect(notification.sendLabelReady).not.toHaveBeenCalled();
+    expect(prisma.returnLabel.update).toHaveBeenCalledWith({ where: { id: 'lbl_saved' }, data: { status: 'created' } });
+    expect(label.status).toBe('created');
+    expect(idem.release).toHaveBeenCalledWith('label-email:ret_lbl_1');
   });
 
   it('an email that does not go out keeps the label "saved" so the next attempt sends it, and nothing else is redone', async () => {

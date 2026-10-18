@@ -22,6 +22,14 @@ import { returnsApi } from '../api';
 import { formatMoney } from '../money';
 
 // Stored carrier codes → display names.
+// What each label state means to a merchant.
+const LABEL_STATUS_TEXT = {
+  pending: 'Being generated',
+  buying: 'Being bought from the carrier',
+  saved: 'Bought — customer not yet emailed',
+  created: 'Sent to the customer',
+};
+
 const CARRIER_NAMES = { royalmail: 'Royal Mail', evri: 'Evri', inpost: 'InPost', dpd: 'DPD', dpduk: 'DPD', ups: 'UPS', dhl: 'DHL', yodel: 'Yodel', parcelforce: 'Parcelforce', shippo: 'Shippo', shipengine: 'ShipEngine' };
 
 const REASON_LABELS = {
@@ -110,7 +118,13 @@ export default function ReturnDetailPage() {
     try {
       const label = await returnsApi.generateLabel(id);
       const tracking = label?.trackingCode ? ` (tracking ${label.trackingCode})` : '';
-      setBanner({ title: `Label generated${tracking}. The customer has been emailed.`, tone: 'success' });
+      // 'created' means every step ran, including the customer's email.
+      // Anything else: the label exists but the email did not go out yet.
+      if (label?.status === 'created') {
+        setBanner({ title: `Label ready${tracking}. The customer has been emailed.`, tone: 'success' });
+      } else {
+        setBanner({ title: `Label bought${tracking}, but the customer could not be emailed yet. Use "Finish label" to try again.`, tone: 'warning' });
+      }
       loadReturn();
     } catch (err) {
       setBanner({ title: `Label failed: ${err.message}`, tone: 'critical' });
@@ -163,8 +177,16 @@ export default function ReturnDetailPage() {
   }
 
   const canApprove = ret.status === 'REQUESTED';
-  // Approved but no label: the label step failed (the reason is on the timeline).
-  const needsLabel = ret.status === 'APPROVED' && (!ret.label || ret.label.status === 'pending');
+  // The label is not finished: none yet, an attempt that failed or crashed
+  // ('pending'/'buying' left behind — stale after 10 minutes), or bought but
+  // a follow-up step (customer email, postage charge) did not finish
+  // ('saved'). All of these can be retried; LabelService resumes safely and
+  // never buys twice. Only a label from the last few minutes is left alone.
+  const labelStatus = ret.label?.status;
+  const labelAgeMin = ret.label?.createdAt ? (Date.now() - new Date(ret.label.createdAt).getTime()) / 60000 : Infinity;
+  const labelInProgress = ['pending', 'buying'].includes(labelStatus) && labelAgeMin < 10;
+  const needsLabel = ['APPROVED', 'LABEL_SENT'].includes(ret.status) && labelStatus !== 'created' && !labelInProgress;
+  const labelAction = !ret.label ? 'Generate label' : labelStatus === 'saved' ? 'Finish label' : 'Retry label';
   const lastLabelFailure = (ret.events || []).find((e) => e.type === 'label.failed')?.data?.error;
   const canProcess = ['RECEIVED', 'INSPECTING', 'APPROVED', 'LABEL_SENT', 'IN_TRANSIT'].includes(ret.status);
 
@@ -187,7 +209,7 @@ export default function ReturnDetailPage() {
         destructive: true,
         onAction: () => setRejectModalOpen(true),
       }] : needsLabel ? [{
-        content: ret.label ? 'Retry label' : 'Generate label',
+        content: labelAction,
         onAction: handleGenerateLabel,
         loading: actionLoading === 'label',
       }] : []}
@@ -198,10 +220,17 @@ export default function ReturnDetailPage() {
             <Banner tone={banner.tone} title={banner.title} action={banner.action} onDismiss={() => setBanner(null)} />
           </Layout.Section>
         )}
-        {needsLabel && !banner && (
+        {needsLabel && !banner && labelStatus === 'saved' && (
+          <Layout.Section>
+            <Banner tone="warning" title="The label was bought but not sent to the customer">
+              <p>A step after the purchase did not finish (the customer's email, or the postage charge). Nothing is lost: use "Finish label" to complete it. It is also retried automatically every 30 minutes.</p>
+            </Banner>
+          </Layout.Section>
+        )}
+        {needsLabel && !banner && labelStatus !== 'saved' && (
           <Layout.Section>
             <Banner tone="warning" title="No label has been sent for this return">
-              <p>{lastLabelFailure || 'The label has not been generated yet.'} Fix the cause, then use "Generate label".</p>
+              <p>{lastLabelFailure || (ret.label ? 'The last attempt did not finish.' : 'The label has not been generated yet.')} Fix the cause, then use "{labelAction}".</p>
             </Banner>
           </Layout.Section>
         )}
@@ -274,7 +303,7 @@ export default function ReturnDetailPage() {
                 <List>
                   <List.Item>Carrier: {CARRIER_NAMES[ret.label.carrier] || ret.label.carrier}</List.Item>
                   <List.Item>Tracking: {ret.label.trackingCode || '—'}</List.Item>
-                  <List.Item>Status: {ret.label.status}</List.Item>
+                  <List.Item>Status: {LABEL_STATUS_TEXT[ret.label.status] || ret.label.status}</List.Item>
                 </List>
 
                 {ret.label.qrCodeUrl && (

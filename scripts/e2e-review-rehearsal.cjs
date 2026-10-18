@@ -148,7 +148,8 @@ async function openReturn(accessToken) {
       orderName: lookup.orderName,
       customerEmail: CUSTOMER.email,
       customerName: `${CUSTOMER.firstName} ${CUSTOMER.lastName}`,
-      resolution: 'REFUND',
+      // E2E_RESOLUTION=STORE_CREDIT rehearses the store-credit path instead.
+      resolution: process.env.E2E_RESOLUTION || 'REFUND',
       items: [{
         lineItemId: li.lineItemId,
         productId: li.productId,

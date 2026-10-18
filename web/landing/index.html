@@ -275,27 +275,11 @@
 
 <section id="install" class="wrap" style="padding:48px 0;text-align:center">
   <h2>Install ReturnFlow on your store</h2>
-  <p class="sub">Enter your store's myshopify domain and we'll take you to Shopify to approve the install.</p>
-  <form id="install-form" style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:16px">
-    <input id="install-shop" type="text" placeholder="your-store.myshopify.com" required
-      style="padding:12px 14px;border:1px solid #ccc;border-radius:8px;min-width:280px;font-size:16px">
-    <button class="btn btn-primary" type="submit">Install on Shopify</button>
-  </form>
-  <p class="trust" style="margin-top:12px">Opens the official Shopify install screen for the ReturnFlow app.</p>
+  <p class="sub">ReturnFlow installs from the Shopify App Store — Shopify handles the sign-in and permissions.</p>
+  <!-- App Store requirement 2.3.1: installs start on a Shopify-owned surface;
+       never ask merchants to type their store's myshopify domain. -->
+  <a class="btn btn-primary btn-lg" style="margin-top:16px" href="https://apps.shopify.com/returns-app-garvit-20260613">Get ReturnFlow on the Shopify App Store</a>
+  <p class="trust" style="margin-top:12px">Opens ReturnFlow's page on the official Shopify App Store.</p>
 </section>
-<script>
-  // Until the App Store listing is approved, the listing URL is a 404. The
-  // Shopify-managed install link works for any store that knows the app id.
-  document.getElementById('install-form').addEventListener('submit', function (e) {
-    e.preventDefault();
-    var raw = document.getElementById('install-shop').value.trim().toLowerCase();
-    var handle = raw.replace(/^https?:\/\//, '').replace(/\.myshopify\.com.*$/, '').replace(/\/.*$/, '');
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(handle)) {
-      alert('Please enter your store domain, e.g. your-store.myshopify.com');
-      return;
-    }
-    window.location.href = 'https://admin.shopify.com/store/' + handle + '/oauth/install?client_id=56cf3e9878ee2a52551ea0921b4c6c67';
-  });
-</script>
 </body>
 </html>

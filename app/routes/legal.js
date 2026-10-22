@@ -4,7 +4,7 @@ const router = Router();
 
 const COMPANY = 'ReturnFlow';
 const DOMAIN = 'returnsflow.uk';
-const SUPPORT_EMAIL = 'support@returnsflow.uk';
+const SUPPORT_EMAIL = 'garvitlakshya91@gmail.com';
 const EFFECTIVE_DATE = '25 June 2026';
 
 // Shared HTML shell so both pages look consistent without a build step.

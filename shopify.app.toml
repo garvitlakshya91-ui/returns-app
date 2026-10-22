@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "56cf3e9878ee2a52551ea0921b4c6c67"
-name = "Returns"
+name = "ReturnFlow"
 application_url = "https://app.returnsflow.uk"
 embedded = true
 handle = "returns-app-garvit-20260613"

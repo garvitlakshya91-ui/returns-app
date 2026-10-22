@@ -6,7 +6,7 @@ export default function AppFooter() {
   return (
     <FooterHelp>
       Questions or feedback? Email{' '}
-      <Link url="mailto:support@returnsflow.uk">support@returnsflow.uk</Link>
+      <Link url="mailto:garvitlakshya91@gmail.com">garvitlakshya91@gmail.com</Link>
     </FooterHelp>
   );
 }

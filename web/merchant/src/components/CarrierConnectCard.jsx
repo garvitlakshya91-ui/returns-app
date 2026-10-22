@@ -31,7 +31,7 @@ const CARRIERS = [
     id: 'evri',
     name: 'Evri',
     status: 'soon',
-    blurb: 'ParcelShop drop-off and QR-code labels across the UK.',
+    blurb: 'Drop-off at ParcelShops across the UK.',
     fields: [{ key: 'apiKey', label: 'API key', sensitive: true }],
     helpUrl: 'https://www.evri.com/business',
   },

@@ -13,12 +13,16 @@ const ITEMS = [
     id: 'li-1', lineItemId: 'li-1', productId: 'p1', variantId: 'v1',
     title: 'Merino Wool Jumper', variantTitle: 'Medium / Forest Green',
     price: 68.0, quantity: 1, sku: 'MWJ-M-GRN',
+    // What the live default policy offers (exchanges are switched off), so
+    // screenshots only show features the app actually has.
+    resolutions: ['REFUND', 'STORE_CREDIT'],
     imageUrl: 'https://images.unsplash.com/photo-1620799140408-edc6dcb6d633?w=200&h=200&fit=crop',
   },
   {
     id: 'li-2', lineItemId: 'li-2', productId: 'p2', variantId: 'v2',
     title: 'Canvas Tote Bag', variantTitle: 'Natural',
     price: 24.0, quantity: 1, sku: 'CTB-NAT',
+    resolutions: ['REFUND', 'STORE_CREDIT'],
     imageUrl: 'https://images.unsplash.com/photo-1597484661643-2f5fef640dd1?w=200&h=200&fit=crop',
   },
 ];
@@ -41,9 +45,7 @@ export const DEMO_DATA = {
   photos: {},
   resolution: 'STORE_CREDIT',
   carrier: 'evri',
-  dropoff: {
-    id: 'evri-1', name: 'Tesco Express', address: '45 High Street, GL1 1DQ',
-    distance: '0.2 miles', openingHours: '6am–11pm daily', type: 'ParcelShop',
-  },
+  // The portal links to the carriers' own drop-off finders; no point is picked.
+  dropoff: null,
   returnResult: null,
 };

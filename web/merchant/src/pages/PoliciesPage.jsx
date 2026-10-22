@@ -259,7 +259,7 @@ export default function PoliciesPage() {
 
             <Text variant="headingSm" as="h3">Allowed resolutions</Text>
             <Checkbox label="Refund to original payment" checked={form.allowRefund} onChange={set('allowRefund')} />
-            <Checkbox label="Store credit (gift card)" checked={form.allowStoreCredit} onChange={set('allowStoreCredit')} />
+            <Checkbox label="Store credit (Shopify store credit)" checked={form.allowStoreCredit} onChange={set('allowStoreCredit')} />
             <Checkbox label="Exchange for another item" checked={form.allowExchange} onChange={set('allowExchange')} />
 
             <Text variant="headingSm" as="h3">Return fees (store currency)</Text>

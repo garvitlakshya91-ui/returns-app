@@ -17,7 +17,7 @@ export default function PortalLayout({ shopName, branding, children }) {
             <span className="block font-semibold text-[15px] text-gray-900">
               {shopName || 'Returns'}
             </span>
-            <span className="block text-xs text-gray-400">Returns &amp; Exchanges</span>
+            <span className="block text-xs text-gray-400">Returns</span>
           </div>
         </div>
       </header>

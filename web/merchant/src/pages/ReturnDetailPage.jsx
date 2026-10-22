@@ -44,7 +44,7 @@ const REASON_LABELS = {
 
 const RESOLUTION_LABELS = {
   REFUND: 'Refund to original payment',
-  STORE_CREDIT: 'Store credit (gift card)',
+  STORE_CREDIT: 'Store credit',
   EXCHANGE: 'Exchange',
   KEEP_ITEM: 'Keep item (no return needed)',
 };

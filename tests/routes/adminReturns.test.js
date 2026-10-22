@@ -114,6 +114,18 @@ describe('PUT /api/admin/returns/:id/approve', () => {
       returnId: 'r1', shopId: 'shop_test_1',
     }));
   });
+
+  it('409 for a test return ("Create test return"): it has no real order to post a label from', async () => {
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'REQUESTED', shopifyOrderId: 'demo' }));
+    const spy = jest.spyOn(eventBus, 'emit');
+
+    const res = await request(app).put('/api/admin/returns/r1/approve');
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: expect.stringMatching(/test return.*real order/), code: 'TEST_RETURN' });
+    expect(prisma.return.update).not.toHaveBeenCalled();
+    expect(spy).not.toHaveBeenCalledWith('return.approved', expect.anything());
+  });
 });
 
 describe('PUT /api/admin/returns/:id/reject', () => {
@@ -195,6 +207,19 @@ describe('POST /api/admin/returns/bulk', () => {
     const res = await request(app).post('/api/admin/returns/bulk').send({ action: 'approve', ids: ['r1', 'r2'] });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ action: 'approve', success: 1, failed: ['r2'] });
+  });
+
+  it('bulk approve skips test returns (reported as failed, never approved)', async () => {
+    prisma.return.findFirst
+      .mockResolvedValueOnce(fakeReturn({ id: 'r1', status: 'REQUESTED' }))
+      .mockResolvedValueOnce(fakeReturn({ id: 'r_test', status: 'REQUESTED', shopifyOrderId: 'demo' }));
+    prisma.return.update.mockResolvedValue(fakeReturn({ id: 'r1', status: 'APPROVED' }));
+
+    const res = await request(app).post('/api/admin/returns/bulk').send({ action: 'approve', ids: ['r1', 'r_test'] });
+
+    expect(res.body).toEqual({ action: 'approve', success: 1, failed: ['r_test'] });
+    expect(prisma.return.update).toHaveBeenCalledTimes(1);
+    expect(prisma.return.update.mock.calls[0][0].where).toEqual({ id: 'r1' });
   });
 });
 

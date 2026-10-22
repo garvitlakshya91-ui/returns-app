@@ -176,7 +176,10 @@ export default function ReturnDetailPage() {
     );
   }
 
-  const canApprove = ret.status === 'REQUESTED';
+  // A test return ("Create test return") has no real Shopify order behind
+  // it, so it can't get a carrier label and the server refuses to approve it.
+  const isTest = !String(ret.shopifyOrderId || '').startsWith('gid://shopify/Order/');
+  const canApprove = ret.status === 'REQUESTED' && !isTest;
   // The label is not finished: none yet, an attempt that failed or crashed
   // ('pending'/'buying' left behind — stale after 10 minutes), or bought but
   // a follow-up step (customer email, postage charge) did not finish
@@ -218,6 +221,13 @@ export default function ReturnDetailPage() {
         {banner && (
           <Layout.Section>
             <Banner tone={banner.tone} title={banner.title} action={banner.action} onDismiss={() => setBanner(null)} />
+          </Layout.Section>
+        )}
+        {isTest && !banner && (
+          <Layout.Section>
+            <Banner tone="info" title="This is a test return">
+              <p>It shows how a return looks in ReturnFlow. It can't be approved, because approving books a real carrier label, which needs a real order and customer address. To try the full flow, place an order in your store and start a return from your returns portal.</p>
+            </Banner>
           </Layout.Section>
         )}
         {needsLabel && !banner && labelStatus === 'saved' && (

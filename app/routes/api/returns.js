@@ -1,4 +1,5 @@
 const { Router } = require('express');
+const { isTestReturn, TEST_RETURN_MESSAGE } = require('../../utils/testReturn');
 const { verifyShopifySession } = require('../../middleware/auth');
 const prisma = require('../../config/database');
 
@@ -102,7 +103,8 @@ router.post('/bulk', async (req, res) => {
       try {
         if (action === 'approve') {
           const r = await prisma.return.findFirst({ where: { id, shopId: req.shopId, status: 'REQUESTED' } });
-          if (!r) { failed.push(id); continue; }
+          // Test returns have no real order to post a label from.
+          if (!r || isTestReturn(r)) { failed.push(id); continue; }
           const updated = await prisma.return.update({ where: { id }, data: { status: 'APPROVED' } });
           eventBus.emit(emitters.RETURN_APPROVED, { returnId: updated.id, shopId: req.shopId, approvedBy: 'merchant' });
           success++;
@@ -224,6 +226,12 @@ router.put('/:id/approve', async (req, res) => {
 
     if (!returnRecord) {
       return res.status(404).json({ error: 'Return not found or not in REQUESTED status' });
+    }
+
+    // A test return has no real order or customer address, so its label
+    // could only fail. Say so instead of approving it.
+    if (isTestReturn(returnRecord)) {
+      return res.status(409).json({ error: TEST_RETURN_MESSAGE, code: 'TEST_RETURN' });
     }
 
     // Approval buys a label, and a label needs somewhere to go. Refuse now,

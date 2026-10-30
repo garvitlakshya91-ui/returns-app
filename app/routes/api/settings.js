@@ -20,7 +20,16 @@ router.get('/', async (req, res) => {
   const base = (process.env.PORTAL_URL || process.env.HOST || '').replace(/\/$/, '');
   const portalUrl = base && slug ? `${base}/portal/${slug}` : '';
 
-  res.json({ ...shop, portalUrl });
+  // Deep link into the theme editor with our "Start a return" app block
+  // ready to place (App Store requirement 5.1.3). The block's extension id
+  // is assigned by Shopify on `shopify app deploy`; until it is configured
+  // the dashboard shows manual steps instead.
+  const extensionId = process.env.THEME_EXTENSION_UUID || '';
+  const themeEditorUrl = extensionId && slug
+    ? `https://admin.shopify.com/store/${slug}/themes/current/editor?template=index&addAppBlockId=${extensionId}/start-return&target=newAppsSection`
+    : '';
+
+  res.json({ ...shop, portalUrl, shopHandle: slug, themeEditorUrl });
   } catch (err) {
     logger.error({ err }, 'Load settings error');
     res.status(500).json({ error: 'Failed to load settings' });

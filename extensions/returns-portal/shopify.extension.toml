@@ -1,0 +1,6 @@
+# Theme app extension: a "Start a return" block merchants add to any page of
+# their online store from the theme editor (Online Store → Themes → Customize
+# → Add block → Apps → Start a return). It links to the shop's ReturnFlow
+# portal; no theme code is edited.
+name = "ReturnFlow returns portal"
+type = "theme"

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Search, AlertCircle, Package } from 'lucide-react';
 import ProgressStepper from '../components/ProgressStepper';
 import { lookupOrder } from '../api';
@@ -7,8 +7,11 @@ import { lookupOrder } from '../api';
 export default function LookupPage({ data, update, branding }) {
   const { shopSlug } = useParams();
   const navigate = useNavigate();
-  const [email, setEmail] = useState('');
-  const [orderNumber, setOrderNumber] = useState('');
+  // Links from the storefront block and order emails prefill the form
+  // (?email=…&order=…); the customer still has to press "Find my order".
+  const [searchParams] = useSearchParams();
+  const [email, setEmail] = useState(searchParams.get('email') || '');
+  const [orderNumber, setOrderNumber] = useState(searchParams.get('order') || '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 

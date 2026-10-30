@@ -91,6 +91,14 @@ export default function SetupGuide() {
       action: { label: 'Customise', onClick: () => navigate('/settings') },
     },
     {
+      key: 'storefront',
+      title: 'Add a "Start a return" button to your store',
+      description: 'A theme block and an order-email link, so customers find the portal without asking you.',
+      done: !!settings.storefrontLinkAdded,
+      required: false,
+      action: { label: 'See how', onClick: () => navigate('/settings') },
+    },
+    {
       key: 'share',
       title: 'Share your returns portal',
       description: portalUrl || 'Your portal link appears here once your shop domain is set.',

@@ -81,7 +81,7 @@ describe('sendEmail — direct path through the real emailRenderer', () => {
     delete process.env.RESEND_API_KEY;
     const resend = installResendMock();
     const NS = load(); // getQueue → null
-    const out = await NS.sendEmail({ to: 'jane@x.com', subject: 'Hi', template: 'GenericFallback', data: { k: 1 } });
+    const out = await NS.sendEmail({ to: 'jane@x.com', subject: 'Hi', template: 'ReturnApproved', data: { customerName: 'Jane', orderName: '#1', returnId: 'r1' } });
     expect(out).toEqual({ sent: true, to: 'jane@x.com', subject: 'Hi' });
     expect(resend.send).not.toHaveBeenCalled();
   });
@@ -90,7 +90,7 @@ describe('sendEmail — direct path through the real emailRenderer', () => {
     process.env.RESEND_API_KEY = 're_123';
     const resend = installResendMock();
     const NS = load();
-    const out = await NS.sendEmail({ to: 'jane@x.com', subject: 'Hi', template: 'GenericFallback', data: { k: 1 } });
+    const out = await NS.sendEmail({ to: 'jane@x.com', subject: 'Hi', template: 'ReturnApproved', data: { customerName: 'Jane', orderName: '#1', returnId: 'r1' } });
     expect(out).toEqual({ sent: true, to: 'jane@x.com', subject: 'Hi', id: 'msg_test' });
     expect(resend.send).toHaveBeenCalledTimes(1);
     const payload = resend.send.mock.calls[0][0];

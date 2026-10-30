@@ -22,6 +22,17 @@ import { returnsApi } from '../api';
 import { formatMoney } from '../money';
 
 // Stored carrier codes → display names.
+// Carrier tracking states, in merchant words, and how loudly to show them.
+const TRACKING_TEXT = {
+  label_created: 'Label created, not yet dropped off',
+  in_transit: 'On its way back to you',
+  delivered: 'Delivered to your returns address',
+  returned_to_sender: 'Sent back to the customer',
+  failed: 'Delivery problem reported by the carrier',
+  unknown: 'No tracking information yet',
+};
+const TRACKING_TONE = { delivered: 'success', failed: 'critical', returned_to_sender: 'warning' };
+
 // What each label state means to a merchant.
 const LABEL_STATUS_TEXT = {
   pending: 'Being generated',
@@ -134,6 +145,19 @@ export default function ReturnDetailPage() {
     }
   }
 
+  async function handleMarkReceived() {
+    setActionLoading('received');
+    try {
+      await returnsApi.markReceived(id);
+      setBanner({ title: 'Marked as received. The customer has been told their parcel arrived.', tone: 'success' });
+      loadReturn();
+    } catch (err) {
+      setBanner({ title: `Could not mark as received: ${err.message}`, tone: 'critical' });
+    } finally {
+      setActionLoading('');
+    }
+  }
+
   async function handleProcess() {
     setActionLoading('process');
     try {
@@ -192,6 +216,7 @@ export default function ReturnDetailPage() {
   const labelAction = !ret.label ? 'Generate label' : labelStatus === 'saved' ? 'Finish label' : 'Retry label';
   const lastLabelFailure = (ret.events || []).find((e) => e.type === 'label.failed')?.data?.error;
   const canProcess = ['RECEIVED', 'INSPECTING', 'APPROVED', 'LABEL_SENT', 'IN_TRANSIT'].includes(ret.status);
+  const canMarkReceived = ['LABEL_SENT', 'IN_TRANSIT'].includes(ret.status);
 
   return (
     <Page
@@ -211,11 +236,20 @@ export default function ReturnDetailPage() {
         content: 'Reject',
         destructive: true,
         onAction: () => setRejectModalOpen(true),
-      }] : needsLabel ? [{
-        content: labelAction,
-        onAction: handleGenerateLabel,
-        loading: actionLoading === 'label',
-      }] : []}
+      }] : [
+        ...(needsLabel ? [{
+          content: labelAction,
+          onAction: handleGenerateLabel,
+          loading: actionLoading === 'label',
+        }] : []),
+        // The carrier's tracking normally does this; the button is for
+        // parcels that arrive before the scan, or carriers without tracking.
+        ...(canMarkReceived ? [{
+          content: 'Mark as received',
+          onAction: handleMarkReceived,
+          loading: actionLoading === 'received',
+        }] : []),
+      ]}
     >
       <Layout>
         {banner && (
@@ -316,6 +350,22 @@ export default function ReturnDetailPage() {
                   <List.Item>Status: {LABEL_STATUS_TEXT[ret.label.status] || ret.label.status}</List.Item>
                 </List>
 
+                {/* Where the parcel is, as last reported by the carrier */}
+                {ret.label.trackingStatus && (
+                  <Banner tone={TRACKING_TONE[ret.label.trackingStatus] || 'info'} title={`Parcel: ${TRACKING_TEXT[ret.label.trackingStatus] || ret.label.trackingStatus}`}>
+                    <p>
+                      {ret.label.trackingDetail || ''}
+                      {ret.label.trackingLocation ? ` · ${ret.label.trackingLocation}` : ''}
+                      {ret.label.trackingAt ? ` · ${new Date(ret.label.trackingAt).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })}` : ''}
+                    </p>
+                  </Banner>
+                )}
+                {!ret.label.trackingStatus && ret.label.status === 'created' && ['LABEL_SENT', 'IN_TRANSIT'].includes(ret.status) && (
+                  <Text variant="bodySm" tone="subdued">
+                    Parcel: no carrier scan yet. Tracking is checked every 30 minutes.
+                  </Text>
+                )}
+
                 {ret.label.qrCodeUrl && (
                   <BlockStack gap="200">
                     <Text variant="bodySm" tone="subdued">QR code (show at drop-off)</Text>
@@ -369,6 +419,13 @@ export default function ReturnDetailPage() {
                       </InlineStack>
                       {event.data?.error && (
                         <Text variant="bodySm" tone="critical">{event.data.error}</Text>
+                      )}
+                      {event.type === 'tracking.updated' && (
+                        <Text variant="bodySm" tone="subdued">
+                          {TRACKING_TEXT[event.data?.status] || event.data?.status}
+                          {event.data?.detail ? ` — ${event.data.detail}` : ''}
+                          {event.data?.location ? ` (${event.data.location})` : ''}
+                        </Text>
                       )}
                     </Box>
                   ))}

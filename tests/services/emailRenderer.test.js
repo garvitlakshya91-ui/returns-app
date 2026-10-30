@@ -18,7 +18,7 @@ const esbuild = require('esbuild');
 const { installResendMock } = require('../helpers');
 
 const EMAILS_DIR = path.resolve(__dirname, '..', '..', 'emails');
-const TEMPLATE_NAMES = ['ReturnConfirmed', 'ReturnApproved', 'LabelReady', 'RefundProcessed', 'ReturnRejected'];
+const TEMPLATE_NAMES = ['ReturnConfirmed', 'ReturnApproved', 'LabelReady', 'RefundProcessed', 'ReturnRejected', 'ReturnReceived'];
 
 const jsxCache = new Map();
 function loadJsx(file) {

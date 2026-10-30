@@ -165,6 +165,24 @@ class NotificationService {
   }
 
   /**
+   * The parcel is back with the merchant: tell the customer.
+   */
+  static async sendReturnReceived(returnRecord) {
+    const brand = await NotificationService._branding(returnRecord.shopId);
+    return NotificationService.sendEmail({
+      to: returnRecord.customerEmail,
+      subject: `We've received your return — ${returnRecord.shopifyOrderName}`,
+      template: 'ReturnReceived',
+      data: {
+        brand,
+        customerName: returnRecord.customerName,
+        orderName: returnRecord.shopifyOrderName,
+        returnId: returnRecord.id,
+      },
+    });
+  }
+
+  /**
    * Send return rejected notification.
    */
   static async sendReturnRejected(returnRecord, reason) {

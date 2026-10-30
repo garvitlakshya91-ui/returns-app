@@ -23,6 +23,7 @@ const TEMPLATES = {
   LabelReady:      () => require(path.join(EMAILS_DIR, 'LabelReady.jsx')),
   RefundProcessed: () => require(path.join(EMAILS_DIR, 'RefundProcessed.jsx')),
   ReturnRejected:  () => require(path.join(EMAILS_DIR, 'ReturnRejected.jsx')),
+  ReturnReceived:  () => require(path.join(EMAILS_DIR, 'ReturnReceived.jsx')),
 };
 
 async function renderTemplate(name, data) {

@@ -9,6 +9,7 @@ const {
   RETURN_CREATED,
   RETURN_APPROVED,
   LABEL_GENERATED,
+  RETURN_RECEIVED,
   REFUND_PROCESSED,
 } = require('../../app/events/emitters');
 
@@ -36,6 +37,7 @@ function installServiceMocks() {
     sendLabelReady: jest.fn().mockResolvedValue({ id: 'msg_label' }),
     sendRefundProcessed: jest.fn().mockResolvedValue({ id: 'msg_refund' }),
     sendReturnRejected: jest.fn().mockResolvedValue({ id: 'msg_rejected' }),
+    sendReturnReceived: jest.fn().mockResolvedValue({ id: 'msg_received' }),
   };
   jest.doMock('../../app/services/NotificationService', () => notification);
 
@@ -399,5 +401,49 @@ describe('pipeline wiring', () => {
     });
     const types = prisma.returnEvent.create.mock.calls.map((c) => c[0].data.type);
     expect(types).toEqual(expect.arrayContaining([RETURN_APPROVED, LABEL_GENERATED]));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// onReturnReceived
+// ---------------------------------------------------------------------------
+describe('onReturnReceived', () => {
+  it('notes the arrival on the timeline (carrier) and emails the customer', async () => {
+    const record = fakeReturn({ id: 'ret_rc1', status: 'RECEIVED' });
+    prisma.return.findUnique.mockResolvedValue(record);
+    prisma.returnEvent.create.mockResolvedValue({});
+    loadHandler('onReturnReceived');
+
+    eventBus.emit(RETURN_RECEIVED, { returnId: 'ret_rc1', shopId: 'shop_test_1', source: 'carrier' });
+    await flush();
+
+    expect(prisma.returnEvent.create).toHaveBeenCalledWith({
+      data: { returnId: 'ret_rc1', type: RETURN_RECEIVED, actor: 'system', data: { source: 'carrier', timestamp: expect.any(String) } },
+    });
+    expect(notification.sendReturnReceived).toHaveBeenCalledWith(record);
+    expect(unhandled).toHaveLength(0);
+  });
+
+  it('records the merchant as the actor when they marked it received by hand', async () => {
+    prisma.return.findUnique.mockResolvedValue(fakeReturn({ id: 'ret_rc2' }));
+    prisma.returnEvent.create.mockResolvedValue({});
+    loadHandler('onReturnReceived');
+
+    eventBus.emit(RETURN_RECEIVED, { returnId: 'ret_rc2', shopId: 'shop_test_1', source: 'merchant' });
+    await flush();
+
+    expect(prisma.returnEvent.create.mock.calls[0][0].data).toMatchObject({ actor: 'merchant', data: { source: 'merchant' } });
+  });
+
+  it('skips the email when the return is missing, and never rejects', async () => {
+    prisma.return.findUnique.mockResolvedValue(null);
+    prisma.returnEvent.create.mockRejectedValue(new Error('db down'));
+    loadHandler('onReturnReceived');
+
+    eventBus.emit(RETURN_RECEIVED, { returnId: 'ret_rc3', shopId: 'shop_test_1' });
+    await flush();
+
+    expect(notification.sendReturnReceived).not.toHaveBeenCalled();
+    expect(unhandled).toHaveLength(0);
   });
 });

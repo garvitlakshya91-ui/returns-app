@@ -264,6 +264,37 @@ router.put('/:id/approve', async (req, res) => {
 });
 
 /**
+ * PUT /api/admin/returns/:id/received
+ * The parcel is back. Normally the carrier's tracking does this (see
+ * jobs/trackParcels); this is for when it does not: a carrier without
+ * tracking, or a parcel that turned up before the scan.
+ */
+router.put('/:id/received', async (req, res) => {
+  try {
+    const returnRecord = await prisma.return.findFirst({
+      where: { id: req.params.id, shopId: req.shopId, status: { in: ['LABEL_SENT', 'IN_TRANSIT'] } },
+    });
+    if (!returnRecord) {
+      return res.status(404).json({ error: 'Return not found, or its parcel is not expected (it needs a label out and not yet received)' });
+    }
+    const updated = await prisma.return.updateMany({
+      where: { id: returnRecord.id, status: { in: ['LABEL_SENT', 'IN_TRANSIT'] } },
+      data: { status: 'RECEIVED' },
+    });
+    if (updated.count === 0) {
+      return res.status(409).json({ error: 'This return has just changed; reload and try again' });
+    }
+    const eventBus = require('../../events/eventBus');
+    const { RETURN_RECEIVED } = require('../../events/emitters');
+    eventBus.emit(RETURN_RECEIVED, { returnId: returnRecord.id, shopId: req.shopId, source: 'merchant' });
+    res.json({ ...returnRecord, status: 'RECEIVED' });
+  } catch (err) {
+    console.error('Mark received error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
  * PUT /api/admin/returns/:id/label
  * Generate (or retry) the label for an approved return whose label failed.
  * Safe to call twice: LabelService holds a lock per return and returns an

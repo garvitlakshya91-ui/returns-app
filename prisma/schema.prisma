@@ -151,6 +151,12 @@ model ReturnLabel {
   cost         Decimal? @db.Decimal(10, 2)
   status       String   @default("created")
   createdAt    DateTime @default(now())
+  // Parcel tracking, as last reported by the carrier (see jobs/trackParcels).
+  trackingStatus    String?   // label_created | in_transit | delivered | returned_to_sender | failed | unknown
+  trackingDetail    String?   // the carrier's own wording for the latest scan
+  trackingLocation  String?
+  trackingAt        DateTime? // when the carrier recorded that scan
+  trackingCheckedAt DateTime? // when we last asked the carrier
 }
 
 model CarrierConfig {

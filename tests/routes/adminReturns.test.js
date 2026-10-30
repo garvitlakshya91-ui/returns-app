@@ -298,3 +298,35 @@ describe('PUT /api/admin/returns/:id/label — generate or retry the label', () 
     expect(NotificationService.sendLabelReady).not.toHaveBeenCalled();
   });
 });
+
+describe('PUT /api/admin/returns/:id/received — the parcel is back', () => {
+  it('moves a LABEL_SENT / IN_TRANSIT return to RECEIVED and announces it as the merchant', async () => {
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'IN_TRANSIT' }));
+    prisma.return.updateMany.mockResolvedValue({ count: 1 });
+    const spy = jest.spyOn(eventBus, 'emit');
+
+    const res = await request(app).put('/api/admin/returns/r1/received');
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('RECEIVED');
+    expect(prisma.return.findFirst.mock.calls[0][0].where).toEqual({ id: 'r1', shopId: 'shop_test_1', status: { in: ['LABEL_SENT', 'IN_TRANSIT'] } });
+    expect(prisma.return.updateMany).toHaveBeenCalledWith({ where: { id: 'r1', status: { in: ['LABEL_SENT', 'IN_TRANSIT'] } }, data: { status: 'RECEIVED' } });
+    expect(spy).toHaveBeenCalledWith('return.received', { returnId: 'r1', shopId: 'shop_test_1', source: 'merchant' });
+  });
+
+  it('404 when no parcel is expected (not approved yet, or already received)', async () => {
+    prisma.return.findFirst.mockResolvedValue(null);
+    const res = await request(app).put('/api/admin/returns/r1/received');
+    expect(res.status).toBe(404);
+    expect(prisma.return.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('409 when the return changed between the read and the write (nothing announced)', async () => {
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'LABEL_SENT' }));
+    prisma.return.updateMany.mockResolvedValue({ count: 0 });
+    const spy = jest.spyOn(eventBus, 'emit');
+    const res = await request(app).put('/api/admin/returns/r1/received');
+    expect(res.status).toBe(409);
+    expect(spy).not.toHaveBeenCalledWith('return.received', expect.anything());
+  });
+});

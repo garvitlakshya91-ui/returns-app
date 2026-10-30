@@ -22,7 +22,13 @@ function load({ queue, renderer } = {}) {
     getQueue: queue || (() => null),
   }));
   if (renderer) jest.doMock(RENDERER, () => renderer);
-  else jest.dontMock(RENDERER);
+  else {
+    jest.dontMock(RENDERER);
+    // Real emailRenderer, but no JSX compilation here (emailRenderer.test.js
+    // covers rendering): the template module and React Email's render are stubbed.
+    jest.doMock('../../emails/ReturnApproved.jsx', () => ({ default: () => null }), { virtual: true });
+    jest.doMock('@react-email/render', () => ({ render: async () => '<p>Rendered: ReturnApproved</p>' }));
+  }
   return require('../../app/services/NotificationService');
 }
 
@@ -75,8 +81,8 @@ describe('sendEmail — queue failure modes', () => {
 });
 
 describe('sendEmail — direct path through the real emailRenderer', () => {
-  // The generic (non-JSX) fallback template keeps this test free of React
-  // Email rendering, which is covered in emailRenderer.test.js.
+  // The template and React Email's render are stubbed in load(); rendering
+  // itself is covered in emailRenderer.test.js.
   it('with no RESEND_API_KEY, skips Resend but still reports the email as sent', async () => {
     delete process.env.RESEND_API_KEY;
     const resend = installResendMock();
@@ -96,7 +102,7 @@ describe('sendEmail — direct path through the real emailRenderer', () => {
     const payload = resend.send.mock.calls[0][0];
     expect(payload.from).toBe('ReturnFlow <onboarding@resend.dev>');
     expect(payload.to).toBe('jane@x.com');
-    expect(payload.html).toContain('Notification: GenericFallback');
+    expect(payload.html).toContain('Rendered: ReturnApproved');
   });
 
   it('swallows a Resend error on the direct path (resolves null, never throws)', async () => {

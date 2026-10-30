@@ -29,7 +29,10 @@ const TEMPLATES = {
 async function renderTemplate(name, data) {
   const loader = TEMPLATES[name];
   if (!loader) {
-    return `<p>Notification: ${name}</p><pre>${JSON.stringify(data, null, 2)}</pre>`;
+    // Never email a customer a raw data dump. This happens when a worker on
+    // older code picks up a job for a template added in a newer deploy;
+    // failing lets the queue retry it on a worker that has the template.
+    throw new Error(`Unknown email template: ${name}`);
   }
   const mod = loader();
   const Component = mod.default || mod;

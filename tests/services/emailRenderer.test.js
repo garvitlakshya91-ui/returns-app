@@ -67,12 +67,9 @@ afterEach(() => {
   delete process.env.RESEND_FROM;
 });
 
-describe('renderTemplate — fallback for unknown templates', () => {
-  it('renders a generic notification with the template name and a JSON dump of the data', async () => {
-    const html = await renderTemplate('SomethingNew', { orderName: '#77', nested: { a: 1 } });
-    expect(html).toContain('<p>Notification: SomethingNew</p>');
-    expect(html).toContain('"orderName": "#77"');
-    expect(html).toContain('"a": 1');
+describe('renderTemplate — unknown templates', () => {
+  it('refuses rather than emailing a customer a raw data dump (a worker on older code retries the job)', async () => {
+    await expect(renderTemplate('SomethingNew', { orderName: '#77', nested: { a: 1 } })).rejects.toThrow('Unknown email template: SomethingNew');
   });
 });
 
@@ -318,9 +315,9 @@ describe('sendEmailNow', () => {
     await expect(sendEmailNow(msg)).rejects.toThrow('Resend returned no message id');
   });
 
-  it('sends the generic fallback markup for unknown templates rather than failing', async () => {
+  it('does not send anything for an unknown template: it throws so the queue retries', async () => {
     process.env.RESEND_API_KEY = 're_test_123';
-    await sendEmailNow({ ...msg, template: 'Mystery', data: { x: 1 } });
-    expect(resend.send.mock.calls[0][0].html).toContain('Notification: Mystery');
+    await expect(sendEmailNow({ ...msg, template: 'Mystery', data: { x: 1 } })).rejects.toThrow('Unknown email template: Mystery');
+    expect(resend.send).not.toHaveBeenCalled();
   });
 });

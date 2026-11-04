@@ -174,7 +174,7 @@ export default function CarrierConnectCard({ plan = 'FREE', onChange }) {
               </InlineStack>
               <Text tone="subdued" variant="bodySm">
                 Generate return labels automatically — no carrier account or API keys needed.
-                Powered by ReturnFlow's carrier network.
+                Powered by ReturnFlow's carrier network. Each label is added to your monthly Shopify bill at the per-label price shown on your plan.
               </Text>
               <div>
                 <Button variant="plain" onClick={() => setVideoOpen(true)}>▶ How managed labels work</Button>

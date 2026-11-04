@@ -36,7 +36,7 @@ export default function ReturnsListPage() {
   const [statusFilter, setStatusFilter] = useState([]);
   const [queryValue, setQueryValue] = useState('');
   const [bulkLoading, setBulkLoading] = useState(false);
-  const [bulkError, setBulkError] = useState('');
+  const [bulkError, setBulkError] = useState(null);
   const [demoLoading, setDemoLoading] = useState(false);
 
   const resourceName = { singular: 'return', plural: 'returns' };
@@ -72,10 +72,18 @@ export default function ReturnsListPage() {
       await loadReturns();
     } catch (err) {
       console.error('Bulk action error:', err);
-      setBulkError(err.message || 'Bulk action failed');
+      setBulkError({ message: err.message || 'Bulk action failed', code: err.code || null, planUrl: err.planUrl || null });
     } finally {
       setBulkLoading(false);
     }
+  }
+
+  // Where each refusal is fixed.
+  function bulkErrorAction(e) {
+    if (e.code === 'RETURNS_ADDRESS_MISSING' || /returns address/i.test(e.message)) return { content: 'Set returns address', onAction: () => navigate('/settings') };
+    if (e.code === 'LABEL_SOURCE_MISSING') return { content: 'Turn on managed labels', onAction: () => navigate('/') };
+    if (e.code === 'LABEL_BILLING' && e.planUrl) return { content: 'Choose a plan', url: e.planUrl, external: true };
+    return undefined;
   }
 
   async function handleDemo() {
@@ -150,10 +158,10 @@ export default function ReturnsListPage() {
       {bulkError && (
         <div style={{ marginBottom: '16px' }}>
           <Banner
-            tone={/returns address/i.test(bulkError) ? 'warning' : 'critical'}
-            title={bulkError}
-            action={/returns address/i.test(bulkError) ? { content: 'Set returns address', onAction: () => navigate('/settings') } : undefined}
-            onDismiss={() => setBulkError('')}
+            tone={bulkErrorAction(bulkError) ? 'warning' : 'critical'}
+            title={bulkError.message}
+            action={bulkErrorAction(bulkError)}
+            onDismiss={() => setBulkError(null)}
           />
         </div>
       )}

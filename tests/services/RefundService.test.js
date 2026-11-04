@@ -241,6 +241,7 @@ describe('REFUND to the original payment', () => {
     expect(createCall[0]).toMatch(/refundCreate\(input: \$input\) @idempotent\(key: "[0-9a-f-]{36}"\)/);
     expect(createCall[1].variables.input).toEqual({
       orderId: 'gid://shopify/Order/1',
+      currency: 'GBP',
       note: 'ReturnFlow return #ret_test_1',
       shipping: { fullRefund: false },
       refundLineItems: [{ lineItemId: 'gid://shopify/LineItem/1', quantity: 2 }],
@@ -250,7 +251,7 @@ describe('REFUND to the original payment', () => {
     expect(result).toEqual({ success: true, type: 'REFUND', shopifyRefundId: 'gid://shopify/Refund/9', amount: 48, requestedAmount: 50, reconciled: false });
     expect(prisma.return.update).toHaveBeenCalledWith({
       where: { id: 'ret_test_1' },
-      data: { status: 'PROCESSED', refundAmount: 48, processedAt: expect.any(Date) },
+      data: { status: 'PROCESSED', refundAmount: 48, processedAt: expect.any(Date), currency: 'GBP' },
     });
     const events = prisma.returnEvent.create.mock.calls.map((c) => c[0].data);
     // The capped amount is on the timeline BEFORE Shopify is called, so a
@@ -363,6 +364,7 @@ describe('STORE_CREDIT through refundCreate (Shopify\'s required route)', () => 
     expect(createCall[0]).toMatch(/@idempotent/);
     expect(createCall[1].variables.input).toEqual({
       orderId: 'gid://shopify/Order/1',
+      currency: 'USD',
       note: 'ReturnFlow return #ret_sc',
       shipping: { fullRefund: false },
       refundLineItems: [{ lineItemId: 'gid://shopify/LineItem/1', quantity: 1 }],
@@ -436,5 +438,39 @@ describe('local (non-Shopify) processing for non-real order ids', () => {
   it('does not need a shop token for locally processed returns', async () => {
     prisma.return.findUnique.mockResolvedValue(ret({ shopifyOrderId: 'demo', shop: fakeShop({ shopifyToken: '' }) }));
     await expect(RefundService.processRefund('ret_test_1')).resolves.toMatchObject({ demo: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe('refunds in the currency the customer paid in', () => {
+  it('uses presentment amounts and names that currency when it differs from the shop currency', async () => {
+    // A USD shop; the customer paid £40 (presentment GBP). Shopify refuses a
+    // refund transaction in the wrong currency ("Currency must match parent
+    // transaction"), so everything is done in GBP.
+    prisma.return.findUnique.mockResolvedValue(ret({ currency: 'USD' }));
+    shopifyClient.request
+      .mockResolvedValueOnce(noExisting)
+      .mockResolvedValueOnce({ data: { order: {
+        currencyCode: 'USD',
+        presentmentCurrencyCode: 'GBP',
+        suggestedRefund: {
+          maximumRefundableSet: { shopMoney: { amount: '52.00' }, presentmentMoney: { amount: '40.00' } },
+          subtotalSet: { shopMoney: { amount: '52.00' }, presentmentMoney: { amount: '40.00' } },
+          totalTaxSet: { shopMoney: { amount: '0.00' }, presentmentMoney: { amount: '0.00' } },
+          suggestedTransactions: [{ kind: 'SUGGESTED_REFUND', gateway: 'shopify_payments', amountSet: { shopMoney: { amount: '52.00' }, presentmentMoney: { amount: '40.00' } }, parentTransaction: { id: 'gid://shopify/OrderTransaction/1' } }],
+        },
+      } } })
+      .mockResolvedValueOnce({ data: { refundCreate: { refund: { id: 'gid://shopify/Refund/gbp', totalRefundedSet: { shopMoney: { amount: '52.00', currencyCode: 'USD' }, presentmentMoney: { amount: '40.00', currencyCode: 'GBP' } } }, userErrors: [] } } });
+
+    const result = await RefundService.processRefund('ret_test_1');
+
+    const input = shopifyClient.request.mock.calls[2][1].variables.input;
+    expect(input.currency).toBe('GBP');
+    expect(input.transactions[0].amount).toBe('40');
+    expect(result).toMatchObject({ amount: 40, requestedAmount: 50 });
+    expect(prisma.return.update).toHaveBeenCalledWith({
+      where: { id: 'ret_test_1' },
+      data: { status: 'PROCESSED', refundAmount: 40, processedAt: expect.any(Date), currency: 'GBP' },
+    });
   });
 });

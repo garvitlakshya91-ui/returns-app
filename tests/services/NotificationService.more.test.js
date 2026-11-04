@@ -206,6 +206,8 @@ describe('sendReturnApproved', () => {
         customerName: 'Chris',
         orderName: '#2002',
         returnId: 'ret_77',
+        withoutLabel: false,
+        returnsAddress: null,
       },
     });
     expect(opts).toMatchObject({ attempts: 3 });

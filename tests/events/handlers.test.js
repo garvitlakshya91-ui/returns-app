@@ -43,6 +43,7 @@ function installServiceMocks() {
 
   labelService = {
     generateLabel: jest.fn().mockResolvedValue({ id: 'lbl_1', trackingCode: 'EVR123', carrier: 'evri' }),
+    returnsAddress: jest.fn().mockResolvedValue({ name: 'Test Shop', line1: '1 Dock Road', city: 'Bristol', postcode: 'BS1 1AA' }),
   };
   jest.doMock('../../app/services/LabelService', () => labelService);
 }
@@ -157,7 +158,7 @@ describe('onReturnApproved', () => {
     });
 
     // Emails + label
-    expect(notification.sendReturnApproved).toHaveBeenCalledWith(approvedRecord);
+    expect(notification.sendReturnApproved).toHaveBeenCalledWith(approvedRecord, { withoutLabel: false, returnsAddress: null });
     expect(labelService.generateLabel).toHaveBeenCalledWith('ret_a1');
     // The label email is sent (and recorded) by LabelService as one of the
     // steps it can resume; the handler must not send a second copy.
@@ -166,6 +167,23 @@ describe('onReturnApproved', () => {
     // Ordering: approved email → generateLabel
     expect(notification.sendReturnApproved.mock.invocationCallOrder[0])
       .toBeLessThan(labelService.generateLabel.mock.invocationCallOrder[0]);
+    expect(unhandled).toHaveLength(0);
+  });
+
+  it('approved "without a label": tells the customer where to post it and buys no label', async () => {
+    primeHappyPath();
+    loadHandler('onReturnApproved');
+
+    eventBus.emit(RETURN_APPROVED, { returnId: 'ret_a1', shopId: 'shop_test_1', approvedBy: 'merchant', withoutLabel: true });
+    await flush();
+
+    expect(prisma.returnEvent.create.mock.calls[0][0].data).toMatchObject({ type: RETURN_APPROVED, data: { withoutLabel: true } });
+    expect(labelService.returnsAddress).toHaveBeenCalledWith(approvedRecord.shop);
+    expect(notification.sendReturnApproved).toHaveBeenCalledWith(approvedRecord, {
+      withoutLabel: true,
+      returnsAddress: { name: 'Test Shop', line1: '1 Dock Road', city: 'Bristol', postcode: 'BS1 1AA' },
+    });
+    expect(labelService.generateLabel).not.toHaveBeenCalled();
     expect(unhandled).toHaveLength(0);
   });
 

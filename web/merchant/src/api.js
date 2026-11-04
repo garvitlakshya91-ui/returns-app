@@ -28,8 +28,14 @@ async function apiFetch(path, options = {}) {
     ...options,
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(err.error || `HTTP ${res.status}`);
+    const body = await res.json().catch(() => ({ error: 'Request failed' }));
+    const err = new Error(body.error || `HTTP ${res.status}`);
+    // Machine-readable detail the pages act on (e.g. a 409 with a fix).
+    err.status = res.status;
+    err.code = body.code || null;
+    err.reason = body.reason || null;
+    err.planUrl = body.planUrl || null;
+    throw err;
   }
   return res.json();
 }
@@ -41,7 +47,8 @@ export const returnsApi = {
     return apiFetch(`/returns${qs ? `?${qs}` : ''}`);
   },
   get: (id) => apiFetch(`/returns/${id}`),
-  approve: (id) => apiFetch(`/returns/${id}/approve`, { method: 'PUT' }),
+  // opts.withoutLabel: approve with no label; the customer posts it themselves.
+  approve: (id, opts = {}) => apiFetch(`/returns/${id}/approve`, { method: 'PUT', body: JSON.stringify(opts) }),
   reject: (id, reason) => apiFetch(`/returns/${id}/reject`, {
     method: 'PUT',
     body: JSON.stringify({ reason }),
@@ -49,9 +56,9 @@ export const returnsApi = {
   process: (id) => apiFetch(`/returns/${id}/process`, { method: 'PUT' }),
   generateLabel: (id) => apiFetch(`/returns/${id}/label`, { method: 'PUT' }),
   markReceived: (id) => apiFetch(`/returns/${id}/received`, { method: 'PUT' }),
-  bulk: (action, ids, reason) => apiFetch('/returns/bulk', {
+  bulk: (action, ids, reason, opts = {}) => apiFetch('/returns/bulk', {
     method: 'POST',
-    body: JSON.stringify({ action, ids, reason }),
+    body: JSON.stringify({ action, ids, reason, ...opts }),
   }),
   demo: () => apiFetch('/returns/demo', { method: 'POST' }),
 };

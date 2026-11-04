@@ -39,7 +39,7 @@ router.get('/', async (req, res) => {
 // Keys the app itself maintains inside Shop.settings. A dashboard save must
 // never overwrite them — e.g. `fulfillments` holds the per-order fulfilment
 // dates the return-window check depends on.
-const SYSTEM_KEYS = ['fulfillments', 'uninstalledAt'];
+const SYSTEM_KEYS = ['fulfillments', 'uninstalledAt', 'shopifyShopId'];
 
 router.put('/', async (req, res) => {
   try {

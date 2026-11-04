@@ -149,7 +149,7 @@ class NotificationService {
   /**
    * Send return approved notification.
    */
-  static async sendReturnApproved(returnRecord) {
+  static async sendReturnApproved(returnRecord, { withoutLabel = false, returnsAddress = null } = {}) {
     const brand = await NotificationService._branding(returnRecord.shopId);
     return NotificationService.sendEmail({
       to: returnRecord.customerEmail,
@@ -160,6 +160,9 @@ class NotificationService {
         customerName: returnRecord.customerName,
         orderName: returnRecord.shopifyOrderName,
         returnId: returnRecord.id,
+        // No label coming: the customer posts it themselves, to this address.
+        withoutLabel: Boolean(withoutLabel),
+        returnsAddress: withoutLabel ? returnsAddress : null,
       },
     });
   }

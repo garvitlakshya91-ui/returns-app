@@ -6,6 +6,7 @@ let app;
 let prisma;
 let eventBus;
 let labelService;
+let billingService;
 
 beforeEach(() => {
   jest.resetModules();
@@ -28,9 +29,18 @@ beforeEach(() => {
   // Approval checks the shop has a returns address (LabelService has its own tests)
   labelService = {
     hasReturnsAddress: jest.fn().mockResolvedValue(true),
+    labelSource: jest.fn(() => ({ kind: 'managed', carrier: 'shippo' })),
     RETURNS_ADDRESS_REQUIRED_MESSAGE: 'Set your returns address before approving returns: Settings → Warehouse address.',
+    NO_LABEL_SOURCE_APPROVAL_MESSAGE: 'Returns need a way to get a label before they are approved: turn on managed return labels, connect your own carrier, or approve this return without a label.',
   };
   jest.doMock('../../app/services/LabelService', () => labelService);
+  // Managed labels need a plan to bill them to (BillingService has its own tests)
+  billingService = {
+    managedLabelBilling: jest.fn().mockResolvedValue({ allowed: true, devStore: true, reason: null, plan: null }),
+    labelBillingMessage: (reason) => (reason === 'no_active_plan' ? 'choose a plan on Shopify\'s plan page first.' : 'try again in a minute.'),
+    pricingPlansUrl: (domain) => `https://admin.shopify.com/store/${String(domain).replace('.myshopify.com', '')}/charges/app/pricing_plans`,
+  };
+  jest.doMock('../../app/services/BillingService', () => billingService);
   prisma.shop.findUnique.mockResolvedValue(fakeShop({ id: 'shop_test_1', settings: { warehouseLine1: '1 Dock Road', warehousePostcode: 'BS1 1AA' } }));
 
   app = express();
@@ -115,6 +125,57 @@ describe('PUT /api/admin/returns/:id/approve', () => {
     }));
   });
 
+  it('409 LABEL_SOURCE_MISSING when the shop has no carrier at all (and the merchant did not choose "without a label")', async () => {
+    labelService.labelSource.mockReturnValue({ kind: 'none', carrier: null });
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'REQUESTED' }));
+    const res = await request(app).put('/api/admin/returns/r1/approve');
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: expect.stringMatching(/without a label/), code: 'LABEL_SOURCE_MISSING' });
+    expect(prisma.return.update).not.toHaveBeenCalled();
+    expect(billingService.managedLabelBilling).not.toHaveBeenCalled();
+  });
+
+  it('409 LABEL_BILLING with the plan page when managed labels have no plan to bill to', async () => {
+    billingService.managedLabelBilling.mockResolvedValue({ allowed: false, devStore: false, reason: 'no_active_plan', plan: null });
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'REQUESTED' }));
+    const res = await request(app).put('/api/admin/returns/r1/approve');
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      error: expect.stringMatching(/choose a plan/),
+      code: 'LABEL_BILLING',
+      reason: 'no_active_plan',
+      planUrl: 'https://admin.shopify.com/store/test-shop/charges/app/pricing_plans',
+    });
+    expect(prisma.return.update).not.toHaveBeenCalled();
+  });
+
+  it('a merchant\'s own carrier needs no billing check', async () => {
+    labelService.labelSource.mockReturnValue({ kind: 'own', carrier: 'royalmail' });
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'REQUESTED' }));
+    prisma.return.update.mockResolvedValue(fakeReturn({ id: 'r1', status: 'APPROVED' }));
+    const res = await request(app).put('/api/admin/returns/r1/approve');
+    expect(res.status).toBe(200);
+    expect(billingService.managedLabelBilling).not.toHaveBeenCalled();
+  });
+
+  it('"without a label" approves with no carrier and no billing check, and says so in the event', async () => {
+    labelService.labelSource.mockReturnValue({ kind: 'none', carrier: null });
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'REQUESTED' }));
+    prisma.return.update.mockResolvedValue(fakeReturn({ id: 'r1', status: 'APPROVED' }));
+    const spy = jest.spyOn(eventBus, 'emit');
+
+    const res = await request(app).put('/api/admin/returns/r1/approve').send({ withoutLabel: true });
+
+    expect(res.status).toBe(200);
+    expect(spy).toHaveBeenCalledWith('return.approved', { returnId: 'r1', shopId: 'shop_test_1', approvedBy: 'merchant', withoutLabel: true });
+    expect(billingService.managedLabelBilling).not.toHaveBeenCalled();
+    // …but still needs somewhere for the customer to post it.
+    labelService.hasReturnsAddress.mockResolvedValue(false);
+    const res2 = await request(app).put('/api/admin/returns/r1/approve').send({ withoutLabel: true });
+    expect(res2.status).toBe(409);
+    expect(res2.body.code).toBe('RETURNS_ADDRESS_MISSING');
+  });
+
   it('409 for a test return ("Create test return"): it has no real order to post a label from', async () => {
     prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'REQUESTED', shopifyOrderId: 'demo' }));
     const spy = jest.spyOn(eventBus, 'emit');
@@ -187,6 +248,20 @@ describe('POST /api/admin/returns/bulk', () => {
     expect(res.status).toBe(409);
     expect(res.body.code).toBe('RETURNS_ADDRESS_MISSING');
     expect(prisma.return.update).not.toHaveBeenCalled();
+  });
+
+  it('bulk approve applies the same carrier and billing gates once, and passes "without a label" through', async () => {
+    labelService.labelSource.mockReturnValue({ kind: 'none', carrier: null });
+    const blocked = await request(app).post('/api/admin/returns/bulk').send({ action: 'approve', ids: ['r1', 'r2'] });
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.code).toBe('LABEL_SOURCE_MISSING');
+
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'REQUESTED' }));
+    prisma.return.update.mockResolvedValue(fakeReturn({ id: 'r1', status: 'APPROVED' }));
+    const spy = jest.spyOn(eventBus, 'emit');
+    const ok = await request(app).post('/api/admin/returns/bulk').send({ action: 'approve', ids: ['r1'], withoutLabel: true });
+    expect(ok.status).toBe(200);
+    expect(spy).toHaveBeenCalledWith('return.approved', expect.objectContaining({ returnId: 'r1', withoutLabel: true }));
   });
 
   it('does not check the address for reject / process bulk actions', async () => {

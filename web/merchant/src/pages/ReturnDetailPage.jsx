@@ -67,6 +67,7 @@ export default function ReturnDetailPage() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState('');
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
+  const [noLabelModalOpen, setNoLabelModalOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [banner, setBanner] = useState(null);
 
@@ -91,20 +92,34 @@ export default function ReturnDetailPage() {
     }
   }
 
-  async function handleApprove() {
+  async function handleApprove({ withoutLabel = false } = {}) {
     setActionLoading('approve');
+    setNoLabelModalOpen(false);
     try {
-      await returnsApi.approve(id);
-      setBanner({ title: 'Return approved — label is being generated', tone: 'success' });
+      await returnsApi.approve(id, withoutLabel ? { withoutLabel: true } : {});
+      setBanner({
+        title: withoutLabel
+          ? 'Return approved without a label. The customer has been asked to post it to your returns address.'
+          : 'Return approved — label is being generated',
+        tone: 'success',
+      });
       loadReturn();
     } catch (err) {
-      // No returns address yet: send the merchant straight to where it is set.
-      const needsAddress = /returns address/i.test(err.message || '');
-      setBanner({
-        title: needsAddress ? err.message : `Approval failed: ${err.message}`,
-        tone: needsAddress ? 'warning' : 'critical',
-        action: needsAddress ? { content: 'Set returns address', onAction: () => navigate('/settings') } : undefined,
-      });
+      // Each refusal comes with the way to fix it.
+      if (err.code === 'RETURNS_ADDRESS_MISSING' || /returns address/i.test(err.message || '')) {
+        setBanner({ title: err.message, tone: 'warning', action: { content: 'Set returns address', onAction: () => navigate('/settings') } });
+      } else if (err.code === 'LABEL_SOURCE_MISSING') {
+        // No carrier: let the merchant pick between setting one up and approving without a label.
+        setNoLabelModalOpen(true);
+      } else if (err.code === 'LABEL_BILLING') {
+        setBanner({
+          title: err.message,
+          tone: 'warning',
+          action: err.planUrl ? { content: 'Choose a plan', url: err.planUrl, external: true } : undefined,
+        });
+      } else {
+        setBanner({ title: `Approval failed: ${err.message}`, tone: 'critical' });
+      }
     } finally {
       setActionLoading('');
     }
@@ -212,7 +227,9 @@ export default function ReturnDetailPage() {
   const labelStatus = ret.label?.status;
   const labelAgeMin = ret.label?.createdAt ? (Date.now() - new Date(ret.label.createdAt).getTime()) / 60000 : Infinity;
   const labelInProgress = ['pending', 'buying'].includes(labelStatus) && labelAgeMin < 10;
-  const needsLabel = ['APPROVED', 'LABEL_SENT'].includes(ret.status) && labelStatus !== 'created' && !labelInProgress;
+  // Approved "without a label": the customer posts it themselves, so no label is expected.
+  const approvedWithoutLabel = !ret.label && (ret.events || []).some((e) => e.type === 'return.approved' && e.data?.withoutLabel);
+  const needsLabel = ['APPROVED', 'LABEL_SENT'].includes(ret.status) && labelStatus !== 'created' && !labelInProgress && !approvedWithoutLabel;
   const labelAction = !ret.label ? 'Generate label' : labelStatus === 'saved' ? 'Finish label' : 'Retry label';
   const lastLabelFailure = (ret.events || []).find((e) => e.type === 'label.failed')?.data?.error;
   const canProcess = ['RECEIVED', 'INSPECTING', 'APPROVED', 'LABEL_SENT', 'IN_TRANSIT'].includes(ret.status);
@@ -225,7 +242,7 @@ export default function ReturnDetailPage() {
       backAction={{ onAction: () => navigate('/returns') }}
       primaryAction={canApprove ? {
         content: 'Approve',
-        onAction: handleApprove,
+        onAction: () => handleApprove(),
         loading: actionLoading === 'approve',
       } : canProcess ? {
         content: 'Process Refund',
@@ -268,6 +285,13 @@ export default function ReturnDetailPage() {
           <Layout.Section>
             <Banner tone="warning" title="The label was bought but not sent to the customer">
               <p>A step after the purchase did not finish (the customer's email, or the postage charge). Nothing is lost: use "Finish label" to complete it. It is also retried automatically every 30 minutes.</p>
+            </Banner>
+          </Layout.Section>
+        )}
+        {approvedWithoutLabel && !banner && ret.status === 'APPROVED' && (
+          <Layout.Section>
+            <Banner tone="info" title="Approved without a label">
+              <p>The customer was asked to post the item back to your returns address at their own cost. Mark the return as received when the parcel arrives, then process the refund.</p>
             </Banner>
           </Layout.Section>
         )}
@@ -437,6 +461,30 @@ export default function ReturnDetailPage() {
       </Layout>
 
       {/* Reject modal */}
+      <Modal
+        open={noLabelModalOpen}
+        onClose={() => setNoLabelModalOpen(false)}
+        title="No return label set up yet"
+        primaryAction={{ content: 'Turn on managed labels', onAction: () => { setNoLabelModalOpen(false); navigate('/'); } }}
+        secondaryActions={[
+          { content: 'Approve without a label', onAction: () => handleApprove({ withoutLabel: true }), loading: actionLoading === 'approve' },
+          { content: 'Cancel', onAction: () => setNoLabelModalOpen(false) },
+        ]}
+      >
+        <Modal.Section>
+          <BlockStack gap="300">
+            <Text as="p">
+              Approving normally emails the customer a prepaid return label. This store has no label source yet.
+            </Text>
+            <List>
+              <List.Item><strong>Turn on managed labels</strong> (Dashboard): real Evri labels, billed per label on your Shopify invoice at the price shown on your plan.</List.Item>
+              <List.Item><strong>Connect your own carrier</strong> (Settings): labels at your own account's rates.</List.Item>
+              <List.Item><strong>Approve without a label</strong>: the customer is emailed your returns address and posts the item back at their own cost.</List.Item>
+            </List>
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
       <Modal
         open={rejectModalOpen}
         onClose={() => setRejectModalOpen(false)}

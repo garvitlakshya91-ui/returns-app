@@ -4,11 +4,11 @@ const prisma = require('../../config/database');
 const LabelService = require('../../services/LabelService');
 const NotificationService = require('../../services/NotificationService');
 
-eventBus.on(RETURN_APPROVED, async ({ returnId, shopId, approvedBy }) => {
+eventBus.on(RETURN_APPROVED, async ({ returnId, shopId, approvedBy, withoutLabel = false }) => {
   try {
     const returnRecord = await prisma.return.findUnique({
       where: { id: returnId },
-      include: { items: true },
+      include: { items: true, shop: true },
     });
 
     // Log event
@@ -17,19 +17,28 @@ eventBus.on(RETURN_APPROVED, async ({ returnId, shopId, approvedBy }) => {
         returnId,
         type: RETURN_APPROVED,
         actor: approvedBy || 'merchant',
-        data: { timestamp: new Date().toISOString() },
+        data: { timestamp: new Date().toISOString(), withoutLabel: Boolean(withoutLabel) },
       },
     });
 
     // Send approved email. Wrapped so an email failure can NEVER block
     // label generation (NotificationService is already non-throwing, but
-    // this is belt-and-suspenders).
+    // this is belt-and-suspenders). Without a label, the email carries the
+    // address the customer should post the parcel to.
     if (returnRecord) {
       try {
-        await NotificationService.sendReturnApproved(returnRecord);
+        const returnsAddress = withoutLabel ? await LabelService.returnsAddress(returnRecord.shop) : null;
+        await NotificationService.sendReturnApproved(returnRecord, { withoutLabel: Boolean(withoutLabel), returnsAddress });
       } catch (emailErr) {
         console.error(`[Event] Approved email failed for ${returnId}:`, emailErr.message);
       }
+    }
+
+    // Approved without a label: the merchant chose not to buy one. Nothing
+    // more to do; the return waits for the parcel.
+    if (withoutLabel) {
+      console.log(`[Event] Return approved without a label: ${returnId}`);
+      return;
     }
 
     // Generate label automatically — this is the critical step and must

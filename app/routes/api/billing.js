@@ -16,12 +16,7 @@ router.use(verifyShopifySession);
 // Shopify has used both wordings: "Managed Pricing Apps cannot use the
 // Billing API" and "Cannot use the Billing API ... when on Shopify App Pricing".
 const MANAGED_PRICING_RE = /managed pricing|app pricing/i;
-const APP_HANDLE = process.env.SHOPIFY_APP_HANDLE || 'returns-app-garvit-20260613';
-
-function pricingPlansUrl(shopDomain) {
-  const storeHandle = String(shopDomain || '').replace('.myshopify.com', '');
-  return `https://admin.shopify.com/store/${storeHandle}/charges/${APP_HANDLE}/pricing_plans`;
-}
+const { pricingPlansUrl } = require('../../services/BillingService');
 
 /**
  * GET /api/admin/billing/plans

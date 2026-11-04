@@ -149,144 +149,139 @@ async function applySubscriptionStatus(shopDomain, { name, status }) {
   return planKey;
 }
 
-/**
- * Find the usage-pricing line-item id on the merchant's active subscription
- * (needed to attach per-label usage charges). Returns null if they're on a plan
- * without a usage component (e.g. FREE), so callers can skip silently.
- */
-async function getUsageLineItemId(client) {
-  const resp = await client.request(`
-    {
-      currentAppInstallation {
-        activeSubscriptions {
-          id status
-          lineItems { id plan { pricingDetails { __typename } } }
-        }
-      }
-    }
-  `);
-  const active = (resp.data?.currentAppInstallation?.activeSubscriptions || []).find((s) => s.status === 'ACTIVE');
-  if (!active) return null;
-  const usage = (active.lineItems || []).find((li) => li.plan?.pricingDetails?.__typename === 'AppUsagePricing');
-  return usage?.id || null;
+// ─── Managed-label billing under Shopify App Pricing ───
+// Plans live in the Partner Dashboard (priced in USD) and each one carries a
+// usage meter for return labels (handle LABEL_METER_HANDLE). Every label
+// bought on ReturnFlow's carrier account is reported as one billable event
+// through Shopify's App Events API; Shopify multiplies by the meter's price
+// and adds it to the merchant's monthly Shopify bill. There is no cap to
+// check and nothing to charge directly. Development stores get every plan at
+// $0, so reporting there costs the merchant nothing.
+const LABEL_METER_HANDLE = process.env.LABEL_METER_HANDLE || 'return_label';
+const APP_EVENTS_VERSION = process.env.SHOPIFY_APP_EVENTS_VERSION || '2026-10';
+const APP_EVENTS_BASE = (process.env.SHOPIFY_APP_EVENTS_BASE || 'https://api.shopify.com').replace(/\/$/, '');
+const APP_HANDLE = process.env.SHOPIFY_APP_HANDLE || 'returns-app-garvit-20260613';
+
+/** Shopify's hosted plan-selection page for this app (Shopify App Pricing). */
+function pricingPlansUrl(shopDomain) {
+  const storeHandle = String(shopDomain || '').replace('.myshopify.com', '');
+  return `https://admin.shopify.com/store/${storeHandle}/charges/${APP_HANDLE}/pricing_plans`;
 }
 
-/**
- * Charge the merchant for one managed label via a Shopify usage record
- * (postage + service fee). Non-fatal: a billing hiccup must never fail label
- * generation, so this swallows errors and returns null.
- */
-/** The one idempotency key a label's charge ever uses, retries included. */
+/** The one idempotency key a label's usage event ever uses, retries included (≤ 64 chars). */
 function labelChargeKey(returnId) {
   return `returnflow:label-charge:${returnId}`;
 }
 
-async function recordLabelCharge(shop, { amount, description, idempotencyKey }) {
-  try {
-    const client = await graphqlClient(shop);
-    const lineItemId = await getUsageLineItemId(client);
-    if (!lineItemId) {
-      logger.info({ shop: shop.shopifyDomain }, 'No usage line item — skipping managed-label charge');
-      return null;
-    }
-    const resp = await client.request(`
-      mutation AppUsageRecordCreate($subscriptionLineItemId: ID!, $price: MoneyInput!, $description: String!, $idempotencyKey: String) {
-        appUsageRecordCreate(subscriptionLineItemId: $subscriptionLineItemId, price: $price, description: $description, idempotencyKey: $idempotencyKey) {
-          appUsageRecord { id }
-          userErrors { field message }
-        }
-      }
-    `, {
-      variables: {
-        subscriptionLineItemId: lineItemId,
-        // The usage line item is GBP (managedLabelBilling refuses any other),
-        // so charge in GBP, not the shop's store currency.
-        price: { amount, currencyCode: 'GBP' },
-        description: String(description).slice(0, 255),
-        idempotencyKey: idempotencyKey ? String(idempotencyKey).slice(0, 255) : null,
-      },
-    });
-    const errs = resp.data?.appUsageRecordCreate?.userErrors || [];
-    if (errs.length > 0) {
-      logger.warn({ shop: shop.shopifyDomain, errs }, 'Managed-label usage charge userErrors');
-      return null;
-    }
-    return resp.data?.appUsageRecordCreate?.appUsageRecord?.id || null;
-  } catch (err) {
-    logger.warn({ shop: shop.shopifyDomain, err: err.message }, 'Managed-label usage charge failed (non-fatal)');
-    return null;
-  }
+// The App Events API authenticates the app itself (client credentials), not
+// a shop. Tokens last an hour; keep one and renew a minute early.
+let appEventsToken = null;
+async function appEventsAccessToken() {
+  if (appEventsToken && appEventsToken.expiresAt > Date.now() + 60 * 1000) return appEventsToken.token;
+  const res = await fetch(`${APP_EVENTS_BASE}/auth/access_token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_id: process.env.SHOPIFY_API_KEY,
+      client_secret: process.env.SHOPIFY_API_SECRET,
+      grant_type: 'client_credentials',
+    }),
+  });
+  if (!res.ok) throw new Error(`App Events auth failed (${res.status})`);
+  const body = await res.json();
+  if (!body?.access_token) throw new Error('App Events auth returned no token');
+  appEventsToken = { token: body.access_token, expiresAt: Date.now() + Number(body.expires_in || 3600) * 1000 };
+  return appEventsToken.token;
 }
 
-// Postage from the managed carrier account is priced in GBP (UK domestic
-// returns), so a usage charge can only recover it on a GBP usage line item.
-const LABEL_POSTAGE_CURRENCY = 'GBP';
-// Headroom a merchant's usage cap must still have before a label is bought:
-// the real postage is only known after purchase, so check for a typical label
-// plus the service fee.
-const LABEL_CHARGE_HEADROOM_GBP = Number(process.env.LABEL_CHARGE_HEADROOM_GBP || 5);
+/** The shop's Shopify id (a gid), read once and kept in Shop.settings. */
+async function shopGid(shop) {
+  const cached = shop.settings?.shopifyShopId;
+  if (cached) return cached;
+  const client = await graphqlClient(shop);
+  const resp = await client.request('{ shop { id } }');
+  const id = resp.data?.shop?.id;
+  if (!id) throw new Error('Could not read the shop id from Shopify');
+  await prisma.shop.update({
+    where: { id: shop.id },
+    data: { settings: { ...(shop.settings || {}), shopifyShopId: id } },
+  }).catch((err) => logger.warn({ shop: shop.shopifyDomain, err: err.message }, 'Could not cache the shop id'));
+  return id;
+}
 
 /**
- * Can a managed label be bought for this shop without ReturnFlow paying for it?
- *
- * A managed label is bought on ReturnFlow's own carrier account, so it may
- * only be bought when the cost can be charged back to the merchant: an active
- * subscription with a GBP usage line item that still has headroom under its
- * cap. Development stores (Shopify's reviewers, our own test store) can't be
- * charged real money, so they are allowed and never charged.
- *
- * Returns { allowed, devStore, reason, lineItemId }. reason is one of
- * 'no_usage_billing' | 'currency_mismatch' | 'usage_cap_reached' |
- * 'billing_check_failed' when allowed is false.
+ * Report one bought label to the merchant's plan meter. Idempotent per
+ * return: Shopify keeps the key for good, so a retry can never bill twice.
+ * Shopify answers 202 as soon as it has the event; whether it billed shows
+ * up in the Dev Dashboard's "App Billing Event" logs (e.g. NO_MATCHING_METER
+ * when the plan has no meter yet).
+ */
+async function reportLabelUsage(shop, { returnId, quantity = 1, at = new Date() }) {
+  const token = await appEventsAccessToken();
+  const shopId = await shopGid(shop);
+  const idempotencyKey = labelChargeKey(returnId);
+  const res = await fetch(`${APP_EVENTS_BASE}/app/${APP_EVENTS_VERSION}/events`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      shop_id: shopId,
+      event_handle: LABEL_METER_HANDLE,
+      timestamp: at.toISOString(),
+      idempotency_key: idempotencyKey,
+      attributes: { value: quantity },
+    }),
+  });
+  if (res.status === 401) appEventsToken = null; // stale token: the retry gets a fresh one
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`App Events rejected the label usage event (${res.status})${detail ? `: ${detail.slice(0, 200)}` : ''}`);
+  }
+  logger.info({ shop: shop.shopifyDomain, returnId, meter: LABEL_METER_HANDLE }, 'Label usage reported to Shopify');
+  return { reported: true, meter: LABEL_METER_HANDLE, idempotencyKey, quantity };
+}
+
+/**
+ * May a managed label be bought for this shop? Under Shopify App Pricing the
+ * merchant agreed to the per-label price when they picked their plan, so
+ * the only requirement is an active plan (Free included). Development
+ * stores are always allowed and are never charged.
+ *  - { allowed: true, devStore: true }         development store
+ *  - { allowed: true, plan }                   a plan is active
+ *  - { allowed: false, reason: 'no_active_plan' }        no plan chosen yet
+ *  - { allowed: false, reason: 'billing_check_failed' }  Shopify could not be asked
  */
 async function managedLabelBilling(shop) {
   try {
     const client = await graphqlClient(shop);
-    if (await isDevelopmentStore(client)) {
-      return { allowed: true, devStore: true, reason: null, lineItemId: null };
+    // settings.treatAsRealStoreForBilling: a development store we use to
+    // rehearse the path real merchants take (plan check + usage event).
+    const rehearsingRealStore = shop.settings?.treatAsRealStoreForBilling === true;
+    if (!rehearsingRealStore && await isDevelopmentStore(client)) {
+      return { allowed: true, devStore: true, reason: null, plan: null };
     }
-
-    const resp = await client.request(`
-      {
-        currentAppInstallation {
-          activeSubscriptions {
-            status
-            lineItems {
-              id
-              plan {
-                pricingDetails {
-                  __typename
-                  ... on AppUsagePricing {
-                    cappedAmount { amount currencyCode }
-                    balanceUsed { amount currencyCode }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    `);
+    const resp = await client.request('{ currentAppInstallation { activeSubscriptions { name status } } }');
     const active = (resp.data?.currentAppInstallation?.activeSubscriptions || []).find((s) => s.status === 'ACTIVE');
-    const usage = (active?.lineItems || []).find((li) => li.plan?.pricingDetails?.__typename === 'AppUsagePricing');
-    if (!usage) {
-      return { allowed: false, devStore: false, reason: 'no_usage_billing', lineItemId: null };
+    if (!active) {
+      return { allowed: false, devStore: false, reason: 'no_active_plan', plan: null };
     }
-
-    const { cappedAmount, balanceUsed } = usage.plan.pricingDetails;
-    if (cappedAmount?.currencyCode !== LABEL_POSTAGE_CURRENCY) {
-      return { allowed: false, devStore: false, reason: 'currency_mismatch', lineItemId: usage.id };
-    }
-    const headroom = Number(cappedAmount.amount || 0) - Number(balanceUsed?.amount || 0);
-    if (headroom < LABEL_CHARGE_HEADROOM_GBP) {
-      return { allowed: false, devStore: false, reason: 'usage_cap_reached', lineItemId: usage.id };
-    }
-    return { allowed: true, devStore: false, reason: null, lineItemId: usage.id };
+    return { allowed: true, devStore: false, reason: null, plan: active.name };
   } catch (err) {
     // Unsure means no: never spend on our own account when we can't confirm
-    // the merchant can be charged.
+    // the merchant has agreed to pay for labels.
     logger.warn({ shop: shop.shopifyDomain, err: err.message }, 'Managed-label billing check failed');
-    return { allowed: false, devStore: false, reason: 'billing_check_failed', lineItemId: null };
+    return { allowed: false, devStore: false, reason: 'billing_check_failed', plan: null };
+  }
+}
+
+/** Why a managed label cannot be bought, in words the merchant can act on. */
+function labelBillingMessage(reason) {
+  switch (reason) {
+    case 'no_active_plan':
+      return 'choose a plan on Shopify\'s plan page first (the Free plan is fine). Return labels are billed per label on your Shopify invoice.';
+    case 'billing_check_failed':
+      return 'we could not confirm your plan with Shopify just now. Try again in a minute.';
+    default:
+      return 'managed labels are not available for this store right now. Connect your own carrier in Settings, or try again later.';
   }
 }
 
@@ -304,8 +299,11 @@ module.exports = {
   getActiveSubscription,
   cancelSubscription,
   applySubscriptionStatus,
-  getUsageLineItemId,
-  recordLabelCharge,
   labelChargeKey,
+  reportLabelUsage,
   managedLabelBilling,
+  labelBillingMessage,
+  pricingPlansUrl,
+  shopGid,
+  LABEL_METER_HANDLE,
 };

@@ -22,6 +22,17 @@ import { returnsApi } from '../api';
 import { formatMoney } from '../money';
 
 // Stored carrier codes → display names.
+// Carrier tracking states, in merchant words, and how loudly to show them.
+const TRACKING_TEXT = {
+  label_created: 'Label created, not yet dropped off',
+  in_transit: 'On its way back to you',
+  delivered: 'Delivered to your returns address',
+  returned_to_sender: 'Sent back to the customer',
+  failed: 'Delivery problem reported by the carrier',
+  unknown: 'No tracking information yet',
+};
+const TRACKING_TONE = { delivered: 'success', failed: 'critical', returned_to_sender: 'warning' };
+
 // What each label state means to a merchant.
 const LABEL_STATUS_TEXT = {
   pending: 'Being generated',
@@ -56,6 +67,7 @@ export default function ReturnDetailPage() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState('');
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
+  const [noLabelModalOpen, setNoLabelModalOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [banner, setBanner] = useState(null);
 
@@ -80,20 +92,34 @@ export default function ReturnDetailPage() {
     }
   }
 
-  async function handleApprove() {
+  async function handleApprove({ withoutLabel = false } = {}) {
     setActionLoading('approve');
+    setNoLabelModalOpen(false);
     try {
-      await returnsApi.approve(id);
-      setBanner({ title: 'Return approved — label is being generated', tone: 'success' });
+      await returnsApi.approve(id, withoutLabel ? { withoutLabel: true } : {});
+      setBanner({
+        title: withoutLabel
+          ? 'Return approved without a label. The customer has been asked to post it to your returns address.'
+          : 'Return approved — label is being generated',
+        tone: 'success',
+      });
       loadReturn();
     } catch (err) {
-      // No returns address yet: send the merchant straight to where it is set.
-      const needsAddress = /returns address/i.test(err.message || '');
-      setBanner({
-        title: needsAddress ? err.message : `Approval failed: ${err.message}`,
-        tone: needsAddress ? 'warning' : 'critical',
-        action: needsAddress ? { content: 'Set returns address', onAction: () => navigate('/settings') } : undefined,
-      });
+      // Each refusal comes with the way to fix it.
+      if (err.code === 'RETURNS_ADDRESS_MISSING' || /returns address/i.test(err.message || '')) {
+        setBanner({ title: err.message, tone: 'warning', action: { content: 'Set returns address', onAction: () => navigate('/settings') } });
+      } else if (err.code === 'LABEL_SOURCE_MISSING') {
+        // No carrier: let the merchant pick between setting one up and approving without a label.
+        setNoLabelModalOpen(true);
+      } else if (err.code === 'LABEL_BILLING') {
+        setBanner({
+          title: err.message,
+          tone: 'warning',
+          action: err.planUrl ? { content: 'Choose a plan', url: err.planUrl, external: true } : undefined,
+        });
+      } else {
+        setBanner({ title: `Approval failed: ${err.message}`, tone: 'critical' });
+      }
     } finally {
       setActionLoading('');
     }
@@ -129,6 +155,19 @@ export default function ReturnDetailPage() {
     } catch (err) {
       setBanner({ title: `Label failed: ${err.message}`, tone: 'critical' });
       loadReturn();
+    } finally {
+      setActionLoading('');
+    }
+  }
+
+  async function handleMarkReceived() {
+    setActionLoading('received');
+    try {
+      await returnsApi.markReceived(id);
+      setBanner({ title: 'Marked as received. The customer has been told their parcel arrived.', tone: 'success' });
+      loadReturn();
+    } catch (err) {
+      setBanner({ title: `Could not mark as received: ${err.message}`, tone: 'critical' });
     } finally {
       setActionLoading('');
     }
@@ -188,10 +227,13 @@ export default function ReturnDetailPage() {
   const labelStatus = ret.label?.status;
   const labelAgeMin = ret.label?.createdAt ? (Date.now() - new Date(ret.label.createdAt).getTime()) / 60000 : Infinity;
   const labelInProgress = ['pending', 'buying'].includes(labelStatus) && labelAgeMin < 10;
-  const needsLabel = ['APPROVED', 'LABEL_SENT'].includes(ret.status) && labelStatus !== 'created' && !labelInProgress;
+  // Approved "without a label": the customer posts it themselves, so no label is expected.
+  const approvedWithoutLabel = !ret.label && (ret.events || []).some((e) => e.type === 'return.approved' && e.data?.withoutLabel);
+  const needsLabel = ['APPROVED', 'LABEL_SENT'].includes(ret.status) && labelStatus !== 'created' && !labelInProgress && !approvedWithoutLabel;
   const labelAction = !ret.label ? 'Generate label' : labelStatus === 'saved' ? 'Finish label' : 'Retry label';
   const lastLabelFailure = (ret.events || []).find((e) => e.type === 'label.failed')?.data?.error;
   const canProcess = ['RECEIVED', 'INSPECTING', 'APPROVED', 'LABEL_SENT', 'IN_TRANSIT'].includes(ret.status);
+  const canMarkReceived = ['LABEL_SENT', 'IN_TRANSIT'].includes(ret.status);
 
   return (
     <Page
@@ -200,7 +242,7 @@ export default function ReturnDetailPage() {
       backAction={{ onAction: () => navigate('/returns') }}
       primaryAction={canApprove ? {
         content: 'Approve',
-        onAction: handleApprove,
+        onAction: () => handleApprove(),
         loading: actionLoading === 'approve',
       } : canProcess ? {
         content: 'Process Refund',
@@ -211,11 +253,20 @@ export default function ReturnDetailPage() {
         content: 'Reject',
         destructive: true,
         onAction: () => setRejectModalOpen(true),
-      }] : needsLabel ? [{
-        content: labelAction,
-        onAction: handleGenerateLabel,
-        loading: actionLoading === 'label',
-      }] : []}
+      }] : [
+        ...(needsLabel ? [{
+          content: labelAction,
+          onAction: handleGenerateLabel,
+          loading: actionLoading === 'label',
+        }] : []),
+        // The carrier's tracking normally does this; the button is for
+        // parcels that arrive before the scan, or carriers without tracking.
+        ...(canMarkReceived ? [{
+          content: 'Mark as received',
+          onAction: handleMarkReceived,
+          loading: actionLoading === 'received',
+        }] : []),
+      ]}
     >
       <Layout>
         {banner && (
@@ -234,6 +285,13 @@ export default function ReturnDetailPage() {
           <Layout.Section>
             <Banner tone="warning" title="The label was bought but not sent to the customer">
               <p>A step after the purchase did not finish (the customer's email, or the postage charge). Nothing is lost: use "Finish label" to complete it. It is also retried automatically every 30 minutes.</p>
+            </Banner>
+          </Layout.Section>
+        )}
+        {approvedWithoutLabel && !banner && ret.status === 'APPROVED' && (
+          <Layout.Section>
+            <Banner tone="info" title="Approved without a label">
+              <p>The customer was asked to post the item back to your returns address at their own cost. Mark the return as received when the parcel arrives, then process the refund.</p>
             </Banner>
           </Layout.Section>
         )}
@@ -316,6 +374,22 @@ export default function ReturnDetailPage() {
                   <List.Item>Status: {LABEL_STATUS_TEXT[ret.label.status] || ret.label.status}</List.Item>
                 </List>
 
+                {/* Where the parcel is, as last reported by the carrier */}
+                {ret.label.trackingStatus && (
+                  <Banner tone={TRACKING_TONE[ret.label.trackingStatus] || 'info'} title={`Parcel: ${TRACKING_TEXT[ret.label.trackingStatus] || ret.label.trackingStatus}`}>
+                    <p>
+                      {ret.label.trackingDetail || ''}
+                      {ret.label.trackingLocation ? ` · ${ret.label.trackingLocation}` : ''}
+                      {ret.label.trackingAt ? ` · ${new Date(ret.label.trackingAt).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })}` : ''}
+                    </p>
+                  </Banner>
+                )}
+                {!ret.label.trackingStatus && ret.label.status === 'created' && ['LABEL_SENT', 'IN_TRANSIT'].includes(ret.status) && (
+                  <Text variant="bodySm" tone="subdued">
+                    Parcel: no carrier scan yet. Tracking is checked every 30 minutes.
+                  </Text>
+                )}
+
                 {ret.label.qrCodeUrl && (
                   <BlockStack gap="200">
                     <Text variant="bodySm" tone="subdued">QR code (show at drop-off)</Text>
@@ -370,6 +444,13 @@ export default function ReturnDetailPage() {
                       {event.data?.error && (
                         <Text variant="bodySm" tone="critical">{event.data.error}</Text>
                       )}
+                      {event.type === 'tracking.updated' && (
+                        <Text variant="bodySm" tone="subdued">
+                          {TRACKING_TEXT[event.data?.status] || event.data?.status}
+                          {event.data?.detail ? ` — ${event.data.detail}` : ''}
+                          {event.data?.location ? ` (${event.data.location})` : ''}
+                        </Text>
+                      )}
                     </Box>
                   ))}
                 </BlockStack>
@@ -380,6 +461,30 @@ export default function ReturnDetailPage() {
       </Layout>
 
       {/* Reject modal */}
+      <Modal
+        open={noLabelModalOpen}
+        onClose={() => setNoLabelModalOpen(false)}
+        title="No return label set up yet"
+        primaryAction={{ content: 'Turn on managed labels', onAction: () => { setNoLabelModalOpen(false); navigate('/'); } }}
+        secondaryActions={[
+          { content: 'Approve without a label', onAction: () => handleApprove({ withoutLabel: true }), loading: actionLoading === 'approve' },
+          { content: 'Cancel', onAction: () => setNoLabelModalOpen(false) },
+        ]}
+      >
+        <Modal.Section>
+          <BlockStack gap="300">
+            <Text as="p">
+              Approving normally emails the customer a prepaid return label. This store has no label source yet.
+            </Text>
+            <List>
+              <List.Item><strong>Turn on managed labels</strong> (Dashboard): real Evri labels, billed per label on your Shopify invoice at the price shown on your plan.</List.Item>
+              <List.Item><strong>Connect your own carrier</strong> (Settings): labels at your own account's rates.</List.Item>
+              <List.Item><strong>Approve without a label</strong>: the customer is emailed your returns address and posts the item back at their own cost.</List.Item>
+            </List>
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
       <Modal
         open={rejectModalOpen}
         onClose={() => setRejectModalOpen(false)}

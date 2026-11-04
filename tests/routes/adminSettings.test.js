@@ -56,7 +56,20 @@ describe('GET /api/admin/settings', () => {
     expect(res.body).toEqual({
       ...selectedShop,
       portalUrl: 'https://portal.test.local/portal/test-shop',
+      shopHandle: 'test-shop',
+      themeEditorUrl: '', // no THEME_EXTENSION_UUID configured → manual steps in the UI
     });
+  });
+
+  it('deep-links the theme editor with the Start-a-return block once the extension id is configured', async () => {
+    process.env.THEME_EXTENSION_UUID = 'ext-uuid-123';
+    prisma.shop.findUnique.mockResolvedValue(selectedShop);
+    try {
+      const res = await request(app).get('/api/admin/settings');
+      expect(res.body.themeEditorUrl).toBe('https://admin.shopify.com/store/test-shop/themes/current/editor?template=index&addAppBlockId=ext-uuid-123/start-return&target=newAppsSection');
+    } finally {
+      delete process.env.THEME_EXTENSION_UUID;
+    }
   });
 
   it('only selects safe columns (never the encrypted shopifyToken)', async () => {
@@ -116,7 +129,7 @@ describe('GET /api/admin/settings', () => {
     prisma.shop.findUnique.mockResolvedValue(null);
     const res = await request(app).get('/api/admin/settings');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ portalUrl: '' });
+    expect(res.body).toEqual({ portalUrl: '', shopHandle: '', themeEditorUrl: '' });
   });
 
   it('500 { error: "Failed to load settings" } when prisma throws', async () => {

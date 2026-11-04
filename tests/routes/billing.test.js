@@ -261,117 +261,112 @@ describe('BillingService.planKeyFromName', () => {
   });
 });
 
-describe('BillingService.recordLabelCharge', () => {
-  function shopObj() {
-    return fakeShop({ shopifyToken: encrypt('shpat_x'), currency: 'GBP' });
-  }
-
-  it('records a usage charge against the subscription usage line item', async () => {
-    const BillingService = require('../../app/services/BillingService');
-    shopifyClient.request
-      .mockResolvedValueOnce({
-        data: { currentAppInstallation: { activeSubscriptions: [{
-          id: 'sub_1', status: 'ACTIVE',
-          lineItems: [
-            { id: 'li_rec', plan: { pricingDetails: { __typename: 'AppRecurringPricing' } } },
-            { id: 'li_usage', plan: { pricingDetails: { __typename: 'AppUsagePricing' } } },
-          ],
-        }] } },
-      })
-      .mockResolvedValueOnce({ data: { appUsageRecordCreate: { appUsageRecord: { id: 'usage_1' }, userErrors: [] } } });
-
-    const id = await BillingService.recordLabelCharge(shopObj(), { amount: 4.7, description: 'Return label #1042' });
-    expect(id).toBe('usage_1');
-    const mutation = shopifyClient.request.mock.calls[1][1].variables;
-    expect(mutation.subscriptionLineItemId).toBe('li_usage');
-    expect(mutation.price).toEqual({ amount: 4.7, currencyCode: 'GBP' });
+describe('BillingService.reportLabelUsage — one billable event per label (App Events API)', () => {
+  const shopObj = (settings = { shopifyShopId: 'gid://shopify/Shop/42' }) => fakeShop({ shopifyToken: encrypt('shpat_x'), settings });
+  const authOk = { ok: true, status: 200, json: async () => ({ access_token: 'tok_1', expires_in: 3600 }) };
+  const accepted = { ok: true, status: 202, json: async () => ({ success: true }), text: async () => '' };
+  beforeEach(() => {
+    process.env.SHOPIFY_API_KEY = 'key_1';
+    process.env.SHOPIFY_API_SECRET = 'secret_1';
+    global.fetch = jest.fn();
   });
+  afterEach(() => { delete global.fetch; });
 
-  it('skips silently (null) when the plan has no usage line item', async () => {
+  it('gets a client-credentials token, then posts the event with the stable idempotency key', async () => {
     const BillingService = require('../../app/services/BillingService');
-    shopifyClient.request.mockResolvedValueOnce({
-      data: { currentAppInstallation: { activeSubscriptions: [{
-        id: 'sub', status: 'ACTIVE',
-        lineItems: [{ id: 'li_rec', plan: { pricingDetails: { __typename: 'AppRecurringPricing' } } }],
-      }] } },
+    global.fetch.mockResolvedValueOnce(authOk).mockResolvedValueOnce(accepted);
+
+    const out = await BillingService.reportLabelUsage(shopObj(), { returnId: 'ret_1', at: new Date('2026-11-04T16:42:00Z') });
+
+    expect(global.fetch.mock.calls[0][0]).toBe('https://api.shopify.com/auth/access_token');
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body)).toEqual({ client_id: 'key_1', client_secret: 'secret_1', grant_type: 'client_credentials' });
+    expect(global.fetch.mock.calls[1][0]).toBe('https://api.shopify.com/app/2026-10/events');
+    expect(global.fetch.mock.calls[1][1].headers.Authorization).toBe('Bearer tok_1');
+    expect(JSON.parse(global.fetch.mock.calls[1][1].body)).toEqual({
+      shop_id: 'gid://shopify/Shop/42',
+      event_handle: 'return_label',
+      timestamp: '2026-11-04T16:42:00.000Z',
+      idempotency_key: 'returnflow:label-charge:ret_1',
+      attributes: { value: 1 },
     });
-    const id = await BillingService.recordLabelCharge(shopObj(), { amount: 4.7, description: 'x' });
-    expect(id).toBeNull();
-    expect(shopifyClient.request).toHaveBeenCalledTimes(1); // no mutation attempted
+    expect(out).toEqual({ reported: true, meter: 'return_label', idempotencyKey: 'returnflow:label-charge:ret_1', quantity: 1 });
+    expect(shopifyClient.request).not.toHaveBeenCalled(); // shop id was cached
   });
 
-  it('charges in GBP even when the store trades in another currency', async () => {
+  it('looks the shop id up once and keeps it in the shop settings', async () => {
     const BillingService = require('../../app/services/BillingService');
-    shopifyClient.request
-      .mockResolvedValueOnce({
-        data: { currentAppInstallation: { activeSubscriptions: [{
-          id: 'sub_1', status: 'ACTIVE',
-          lineItems: [{ id: 'li_usage', plan: { pricingDetails: { __typename: 'AppUsagePricing' } } }],
-        }] } },
-      })
-      .mockResolvedValueOnce({ data: { appUsageRecordCreate: { appUsageRecord: { id: 'usage_2' }, userErrors: [] } } });
+    shopifyClient.request.mockResolvedValueOnce({ data: { shop: { id: 'gid://shopify/Shop/7' } } });
+    prisma.shop.update.mockResolvedValue({});
+    global.fetch.mockResolvedValueOnce(authOk).mockResolvedValueOnce(accepted);
 
-    await BillingService.recordLabelCharge(fakeShop({ shopifyToken: encrypt('shpat_x'), currency: 'USD' }), { amount: 3.21, description: 'x' });
-    expect(shopifyClient.request.mock.calls[1][1].variables.price).toEqual({ amount: 3.21, currencyCode: 'GBP' });
+    await BillingService.reportLabelUsage(shopObj({ warehouseLine1: 'x' }), { returnId: 'ret_2' });
+
+    expect(JSON.parse(global.fetch.mock.calls[1][1].body).shop_id).toBe('gid://shopify/Shop/7');
+    expect(prisma.shop.update).toHaveBeenCalledWith({ where: { id: 'shop_test_1' }, data: { settings: { warehouseLine1: 'x', shopifyShopId: 'gid://shopify/Shop/7' } } });
+  });
+
+  it('reuses the token for later events', async () => {
+    const BillingService = require('../../app/services/BillingService');
+    global.fetch.mockResolvedValueOnce(authOk).mockResolvedValueOnce(accepted).mockResolvedValueOnce(accepted);
+    await BillingService.reportLabelUsage(shopObj(), { returnId: 'ret_a' });
+    await BillingService.reportLabelUsage(shopObj(), { returnId: 'ret_b' });
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(global.fetch.mock.calls[2][1].body).idempotency_key).toBe('returnflow:label-charge:ret_b');
+  });
+
+  it('throws when Shopify does not accept the event, so the ledger records it and the retry job tries again', async () => {
+    const BillingService = require('../../app/services/BillingService');
+    global.fetch.mockResolvedValueOnce(authOk).mockResolvedValueOnce({ ok: false, status: 422, text: async () => 'bad request' });
+    await expect(BillingService.reportLabelUsage(shopObj(), { returnId: 'ret_1' })).rejects.toThrow(/422.*bad request/);
+  });
+
+  it('the idempotency key fits Shopify\'s 64-character limit for any return id', () => {
+    const BillingService = require('../../app/services/BillingService');
+    expect(BillingService.labelChargeKey('cmvdx312b0001mn01url2zu29').length).toBeLessThanOrEqual(64);
   });
 });
 
-describe('BillingService.managedLabelBilling', () => {
+describe('BillingService.managedLabelBilling — under Shopify App Pricing', () => {
   const shop = () => fakeShop({ shopifyToken: encrypt('shpat_x') });
   const devStore = (dev) => ({ data: { shop: { plan: { partnerDevelopment: dev } } } });
-  const subscription = (pricingDetails) => ({
-    data: { currentAppInstallation: { activeSubscriptions: [{
-      status: 'ACTIVE',
-      lineItems: [
-        { id: 'li_rec', plan: { pricingDetails: { __typename: 'AppRecurringPricing' } } },
-        ...(pricingDetails ? [{ id: 'li_usage', plan: { pricingDetails } }] : []),
-      ],
-    }] } },
-  });
-  const usage = (cap, used, currencyCode = 'GBP') => ({
-    __typename: 'AppUsagePricing',
-    cappedAmount: { amount: String(cap), currencyCode },
-    balanceUsed: { amount: String(used), currencyCode },
-  });
+  const subs = (list) => ({ data: { currentAppInstallation: { activeSubscriptions: list } } });
 
-  it('allows a development store without charging it', async () => {
+  it('allows a development store (its plan is $0, so labels cost it nothing)', async () => {
     const BillingService = require('../../app/services/BillingService');
     shopifyClient.request.mockResolvedValueOnce(devStore(true));
-    expect(await BillingService.managedLabelBilling(shop())).toEqual({ allowed: true, devStore: true, reason: null, lineItemId: null });
+    expect(await BillingService.managedLabelBilling(shop())).toEqual({ allowed: true, devStore: true, reason: null, plan: null });
     expect(shopifyClient.request).toHaveBeenCalledTimes(1);
   });
 
-  it('refuses a real store whose plan has no usage billing', async () => {
+  it('allows a real store with any active plan, Free included: the per-label price is on the plan', async () => {
     const BillingService = require('../../app/services/BillingService');
-    shopifyClient.request.mockResolvedValueOnce(devStore(false)).mockResolvedValueOnce(subscription(null));
-    expect(await BillingService.managedLabelBilling(shop())).toMatchObject({ allowed: false, reason: 'no_usage_billing' });
+    shopifyClient.request.mockResolvedValueOnce(devStore(false)).mockResolvedValueOnce(subs([{ name: 'Free', status: 'ACTIVE' }]));
+    expect(await BillingService.managedLabelBilling(shop())).toEqual({ allowed: true, devStore: false, reason: null, plan: 'Free' });
   });
 
-  it('refuses when the usage line item is not in GBP', async () => {
+  it('refuses a real store that has not chosen a plan yet, and says how to fix it', async () => {
     const BillingService = require('../../app/services/BillingService');
-    shopifyClient.request.mockResolvedValueOnce(devStore(false)).mockResolvedValueOnce(subscription(usage(200, 0, 'USD')));
-    expect(await BillingService.managedLabelBilling(shop())).toMatchObject({ allowed: false, reason: 'currency_mismatch' });
+    shopifyClient.request.mockResolvedValueOnce(devStore(false)).mockResolvedValueOnce(subs([{ name: 'Growth', status: 'CANCELLED' }]));
+    expect(await BillingService.managedLabelBilling(shop())).toMatchObject({ allowed: false, reason: 'no_active_plan' });
+    expect(BillingService.labelBillingMessage('no_active_plan')).toMatch(/choose a plan/i);
+    expect(BillingService.pricingPlansUrl('acme.myshopify.com')).toBe('https://admin.shopify.com/store/acme/charges/returns-app-garvit-20260613/pricing_plans');
   });
 
-  it('refuses when the usage cap has less headroom than one label', async () => {
+  it('a development store marked treatAsRealStoreForBilling takes the real-merchant path (for rehearsals)', async () => {
     const BillingService = require('../../app/services/BillingService');
-    shopifyClient.request.mockResolvedValueOnce(devStore(false)).mockResolvedValueOnce(subscription(usage(200, 197)));
-    expect(await BillingService.managedLabelBilling(shop())).toMatchObject({ allowed: false, reason: 'usage_cap_reached' });
+    shopifyClient.request.mockResolvedValueOnce(subs([{ name: 'Growth', status: 'ACTIVE' }]));
+    const rehearsal = fakeShop({ shopifyToken: encrypt('shpat_x'), settings: { treatAsRealStoreForBilling: true } });
+    expect(await BillingService.managedLabelBilling(rehearsal)).toEqual({ allowed: true, devStore: false, reason: null, plan: 'Growth' });
+    expect(shopifyClient.request).toHaveBeenCalledTimes(1); // the dev-store question is skipped
   });
 
-  it('allows a real store with GBP usage billing and room under the cap', async () => {
-    const BillingService = require('../../app/services/BillingService');
-    shopifyClient.request.mockResolvedValueOnce(devStore(false)).mockResolvedValueOnce(subscription(usage(200, 20)));
-    expect(await BillingService.managedLabelBilling(shop())).toEqual({ allowed: true, devStore: false, reason: null, lineItemId: 'li_usage' });
-  });
-
-  it('refuses when the billing check itself fails', async () => {
+  it('refuses when the check itself fails (never spend when unsure)', async () => {
     const BillingService = require('../../app/services/BillingService');
     shopifyClient.request.mockResolvedValueOnce(devStore(false)).mockRejectedValueOnce(new Error('Shopify down'));
     expect(await BillingService.managedLabelBilling(shop())).toMatchObject({ allowed: false, reason: 'billing_check_failed' });
+    expect(BillingService.labelBillingMessage('billing_check_failed')).toMatch(/try again/i);
   });
 });
-
 describe("POST /api/admin/billing/subscribe — App Pricing refusal wordings", () => {
   it.each([
     'Managed Pricing Apps cannot use the Billing API (to create charges).',

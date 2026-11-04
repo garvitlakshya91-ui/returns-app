@@ -7,6 +7,16 @@ import { formatMoney } from '../money';
 // Stored carrier codes → names customers recognise.
 const CARRIER_NAMES = { royalmail: 'Royal Mail', evri: 'Evri', inpost: 'InPost', dpd: 'DPD', dpduk: 'DPD', ups: 'UPS', dhl: 'DHL', yodel: 'Yodel', parcelforce: 'Parcelforce' };
 
+// Carrier tracking states in customer words.
+const TRACKING_TEXT = {
+  label_created: 'Label created — not dropped off yet',
+  in_transit: 'On its way',
+  delivered: 'Delivered to the store',
+  returned_to_sender: 'Being returned to you',
+  failed: 'Delivery problem — please contact the store',
+  unknown: 'No tracking update yet',
+};
+
 const STATUS_COPY = {
   REQUESTED: 'We\'ve received your return and are reviewing it.',
   APPROVED: 'Your return has been approved. Your shipping label is on its way.',
@@ -164,6 +174,13 @@ export default function ReturnStatusPage() {
           <p className="text-indigo-700">
             Tracking: <strong>{ret.label.trackingCode}</strong>
           </p>
+          {ret.label.trackingStatus && (
+            <p className="text-indigo-700 mt-1">
+              Parcel: <strong>{TRACKING_TEXT[ret.label.trackingStatus] || ret.label.trackingStatus}</strong>
+              {ret.label.trackingLocation ? ` — ${ret.label.trackingLocation}` : ''}
+              {ret.label.trackingAt ? ` (${new Date(ret.label.trackingAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })})` : ''}
+            </p>
+          )}
         </div>
       )}
     </div>

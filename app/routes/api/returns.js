@@ -70,6 +70,41 @@ router.get('/stats', async (req, res) => {
 });
 
 /**
+ * Why a return may not be approved right now, or null when it may:
+ *  - RETURNS_ADDRESS_MISSING: no address for the parcel (and for the
+ *    "post it yourself" email)
+ *  - LABEL_SOURCE_MISSING: no carrier at all, and the merchant did not ask to
+ *    approve without a label
+ *  - LABEL_BILLING: managed labels, but no plan to bill them to (reason +
+ *    the plan page to fix it)
+ */
+async function approvalBlocker(shopId, withoutLabel) {
+  const LabelService = require('../../services/LabelService');
+  const shop = await prisma.shop.findUnique({ where: { id: shopId }, include: { carrierConfigs: true } });
+  if (!shop || !(await LabelService.hasReturnsAddress(shop))) {
+    return { error: LabelService.RETURNS_ADDRESS_REQUIRED_MESSAGE, code: 'RETURNS_ADDRESS_MISSING' };
+  }
+  if (withoutLabel) return null;
+  const source = LabelService.labelSource(shop);
+  if (source.kind === 'none') {
+    return { error: LabelService.NO_LABEL_SOURCE_APPROVAL_MESSAGE, code: 'LABEL_SOURCE_MISSING' };
+  }
+  if (source.kind === 'managed') {
+    const BillingService = require('../../services/BillingService');
+    const billing = await BillingService.managedLabelBilling(shop);
+    if (!billing.allowed) {
+      return {
+        error: `Labels cannot be bought yet: ${BillingService.labelBillingMessage(billing.reason)}`,
+        code: 'LABEL_BILLING',
+        reason: billing.reason,
+        planUrl: BillingService.pricingPlansUrl(shop.shopifyDomain),
+      };
+    }
+  }
+  return null;
+}
+
+/**
  * POST /api/admin/returns/bulk
  * Apply approve / reject / process to many returns at once. Each item is
  * handled independently — failures are reported, not fatal.
@@ -84,14 +119,13 @@ router.post('/bulk', async (req, res) => {
       return res.status(400).json({ error: 'action must be approve, reject or process' });
     }
 
-    // Same rule as single approval: nothing is approved until returns have
-    // somewhere to go.
+    // Same rules as single approval: nothing is approved until returns have
+    // somewhere to go and a way to get a label (or the merchant chose to
+    // approve without one).
+    const withoutLabel = Boolean(req.body?.withoutLabel);
     if (action === 'approve') {
-      const LabelService = require('../../services/LabelService');
-      const shop = await prisma.shop.findUnique({ where: { id: req.shopId } });
-      if (!shop || !(await LabelService.hasReturnsAddress(shop))) {
-        return res.status(409).json({ error: LabelService.RETURNS_ADDRESS_REQUIRED_MESSAGE, code: 'RETURNS_ADDRESS_MISSING' });
-      }
+      const refusal = await approvalBlocker(req.shopId, withoutLabel);
+      if (refusal) return res.status(409).json(refusal);
     }
 
     const eventBus = require('../../events/eventBus');
@@ -106,7 +140,7 @@ router.post('/bulk', async (req, res) => {
           // Test returns have no real order to post a label from.
           if (!r || isTestReturn(r)) { failed.push(id); continue; }
           const updated = await prisma.return.update({ where: { id }, data: { status: 'APPROVED' } });
-          eventBus.emit(emitters.RETURN_APPROVED, { returnId: updated.id, shopId: req.shopId, approvedBy: 'merchant' });
+          eventBus.emit(emitters.RETURN_APPROVED, { returnId: updated.id, shopId: req.shopId, approvedBy: 'merchant', withoutLabel });
           success++;
         } else if (action === 'reject') {
           const r = await prisma.return.findFirst({ where: { id, shopId: req.shopId, status: 'REQUESTED' } });
@@ -234,14 +268,14 @@ router.put('/:id/approve', async (req, res) => {
       return res.status(409).json({ error: TEST_RETURN_MESSAGE, code: 'TEST_RETURN' });
     }
 
-    // Approval buys a label, and a label needs somewhere to go. Refuse now,
-    // with a fix the merchant can act on, rather than approving a return
-    // that can never ship.
-    const LabelService = require('../../services/LabelService');
-    const shop = await prisma.shop.findUnique({ where: { id: req.shopId } });
-    if (!shop || !(await LabelService.hasReturnsAddress(shop))) {
-      return res.status(409).json({ error: LabelService.RETURNS_ADDRESS_REQUIRED_MESSAGE, code: 'RETURNS_ADDRESS_MISSING' });
-    }
+    // Approval normally buys a label: the label needs somewhere to go and a
+    // carrier to come from, and a managed label needs a plan to bill. Refuse
+    // now, with a fix the merchant can act on, rather than approving a return
+    // that then fails. "withoutLabel" skips the label: the customer is asked
+    // to post the item back at their own cost.
+    const withoutLabel = Boolean(req.body?.withoutLabel);
+    const refusal = await approvalBlocker(req.shopId, withoutLabel);
+    if (refusal) return res.status(409).json(refusal);
 
     const updated = await prisma.return.update({
       where: { id: req.params.id },
@@ -254,11 +288,43 @@ router.put('/:id/approve', async (req, res) => {
       returnId: updated.id,
       shopId: req.shopId,
       approvedBy: 'merchant',
+      withoutLabel,
     });
 
     res.json(updated);
   } catch (err) {
     console.error('Approve return error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * PUT /api/admin/returns/:id/received
+ * The parcel is back. Normally the carrier's tracking does this (see
+ * jobs/trackParcels); this is for when it does not: a carrier without
+ * tracking, or a parcel that turned up before the scan.
+ */
+router.put('/:id/received', async (req, res) => {
+  try {
+    const returnRecord = await prisma.return.findFirst({
+      where: { id: req.params.id, shopId: req.shopId, status: { in: ['LABEL_SENT', 'IN_TRANSIT'] } },
+    });
+    if (!returnRecord) {
+      return res.status(404).json({ error: 'Return not found, or its parcel is not expected (it needs a label out and not yet received)' });
+    }
+    const updated = await prisma.return.updateMany({
+      where: { id: returnRecord.id, status: { in: ['LABEL_SENT', 'IN_TRANSIT'] } },
+      data: { status: 'RECEIVED' },
+    });
+    if (updated.count === 0) {
+      return res.status(409).json({ error: 'This return has just changed; reload and try again' });
+    }
+    const eventBus = require('../../events/eventBus');
+    const { RETURN_RECEIVED } = require('../../events/emitters');
+    eventBus.emit(RETURN_RECEIVED, { returnId: returnRecord.id, shopId: req.shopId, source: 'merchant' });
+    res.json({ ...returnRecord, status: 'RECEIVED' });
+  } catch (err) {
+    console.error('Mark received error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

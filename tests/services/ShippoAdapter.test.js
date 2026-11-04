@@ -219,3 +219,66 @@ describe('ShippoAdapter — findLabel (reconcile a purchase that was never saved
     await expect(live().findLabel({ reference: 'ret_9' })).rejects.toThrow(/503/);
   });
 });
+
+describe('ShippoAdapter — parcel tracking (GET /tracks/{carrier}/{number})', () => {
+  const live = () => new ShippoAdapter({ credentials: { apiKey: 'shippo_live_x' }, settings: { live: true } });
+  const track = (status, extra = {}) => ({
+    ok: true,
+    json: async () => ({
+      carrier: 'hermes_uk', tracking_number: 'H01', eta: '2026-11-02T12:00:00Z',
+      tracking_status: { status, status_details: 'Scanned at depot', status_date: '2026-10-30T09:15:00Z', location: { city: 'Birmingham', state: '', zip: 'B1', country: 'GB' }, ...extra },
+    }),
+  });
+
+  it('asks Shippo with its own carrier token for ours (Evri is still "hermes_uk") and maps the status', async () => {
+    global.fetch = jest.fn().mockResolvedValue(track('TRANSIT'));
+
+    const s = await live().getTrackingStatus('H01', 'evri');
+
+    expect(global.fetch.mock.calls[0][0]).toMatch(/\/tracks\/hermes_uk\/H01$/);
+    expect(global.fetch.mock.calls[0][1].headers.Authorization).toBe('ShippoToken shippo_live_x');
+    expect(s).toEqual({
+      status: 'in_transit', detail: 'Scanned at depot', location: 'Birmingham, GB',
+      lastUpdate: new Date('2026-10-30T09:15:00Z'), estimatedDelivery: new Date('2026-11-02T12:00:00Z'), trackingUrl: null,
+    });
+  });
+
+  it.each([
+    ['PRE_TRANSIT', 'label_created'], ['TRANSIT', 'in_transit'], ['DELIVERED', 'delivered'],
+    ['RETURNED', 'returned_to_sender'], ['FAILURE', 'failed'], ['UNKNOWN', 'unknown'], ['SOMETHING_NEW', 'unknown'],
+  ])('maps Shippo %s to %s', async (theirs, ours) => {
+    global.fetch = jest.fn().mockResolvedValue(track(theirs));
+    expect((await live().getTrackingStatus('H01', 'evri')).status).toBe(ours);
+  });
+
+  it('knows the UK carrier tokens and passes unknown codes through', () => {
+    expect(ShippoAdapter.trackingCarrierToken('evri')).toBe('hermes_uk');
+    expect(ShippoAdapter.trackingCarrierToken('royalmail')).toBe('royal_mail');
+    expect(ShippoAdapter.trackingCarrierToken('dpd')).toBe('dpd_uk');
+    expect(ShippoAdapter.trackingCarrierToken('DHL')).toBe('dhl_express');
+    expect(ShippoAdapter.trackingCarrierToken('parcelforce')).toBe('parcelforce');
+    expect(ShippoAdapter.trackingCarrierToken('yodel')).toBe('yodel');
+    expect(ShippoAdapter.trackingCarrierToken(null)).toBe('shippo');
+  });
+
+  it('a 4xx (not scanned yet, or not trackable from this account) is "unknown" with Shippo\'s reason; a 5xx throws', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 404, json: async () => ({}) });
+    expect((await live().getTrackingStatus('H01', 'evri')).status).toBe('unknown');
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 400, json: async () => ({ detail: 'Tracking is only available for shipments created through Shippo' }) });
+    expect(await live().getTrackingStatus('H01', 'evri')).toMatchObject({ status: 'unknown', detail: /only available/ });
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 503 });
+    await expect(live().getTrackingStatus('H01', 'evri')).rejects.toThrow(/503/);
+  });
+
+  it('a response with no tracking_status yet is "unknown"', async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ carrier: 'hermes_uk', tracking_number: 'H01', tracking_history: [] }) });
+    expect((await live().getTrackingStatus('H01', 'evri')).status).toBe('unknown');
+  });
+
+  it('in simulation mode never calls the network and says so', async () => {
+    global.fetch = jest.fn();
+    const s = await new ShippoAdapter({}).getTrackingStatus('SHP1', 'evri');
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(s.simulated).toBe(true);
+  });
+});

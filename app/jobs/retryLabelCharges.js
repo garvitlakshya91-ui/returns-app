@@ -14,9 +14,9 @@ const MAX_ATTEMPTS = 5;
 const STALE_DUE_MS = 10 * 60 * 1000;
 
 /**
- * Every managed label's postage is announced on the return's timeline as
- * label.charge_due before Shopify is asked, then recorded as label.charged
- * or label.charge_failed. This job finds the failed ones, and the announced
+ * Every managed label is announced on the return's timeline as
+ * label.charge_due before Shopify is told, then recorded as label.charged
+ * (usage event accepted) or label.charge_failed. This job finds the failed ones, and the announced
  * ones that never reached an outcome (a crash mid-charge), and tries the
  * usage charge again (the merchant may have upgraded, raised their cap, or
  * Shopify may simply have been down). The same idempotency key is used
@@ -43,7 +43,7 @@ async function retryFailedLabelCharges({ now = new Date() } = {}) {
   }
   const due = [...state.entries()].filter(([, s]) => !s.charged
     && s.attempts < MAX_ATTEMPTS
-    && Number(s.last?.amount) > 0
+    && (Number(s.last?.quantity) > 0 || Number(s.last?.amount) > 0)
     // Failed at least once, or announced long enough ago that no outcome is coming.
     && (s.attempts > 0 || (s.dueAt && now.getTime() - new Date(s.dueAt).getTime() > STALE_DUE_MS)));
 
@@ -57,34 +57,33 @@ async function retryFailedLabelCharges({ now = new Date() } = {}) {
     const returnRecord = await prisma.return.findUnique({ where: { id: returnId }, include: { shop: true, label: true } });
     if (!returnRecord?.shop || !returnRecord.label) { await release(claimKey); continue; }
     const BillingService = require('../services/BillingService');
-    const amount = Number(s.last.amount);
-    let usageRecordId = null;
+    const quantity = Number(s.last.quantity || 1);
+    let result = null;
     let error = null;
     try {
-      usageRecordId = await BillingService.recordLabelCharge(returnRecord.shop, {
-        amount,
-        description: `Return label ${returnRecord.label.carrier} ${returnRecord.shopifyOrderName}`,
-        idempotencyKey: BillingService.labelChargeKey(returnId),
-      });
+      // Same idempotency key as the first attempt: Shopify keeps it for good,
+      // so this can never bill the label twice.
+      result = await BillingService.reportLabelUsage(returnRecord.shop, { returnId, quantity });
     } catch (err) {
       error = err.message;
     }
     await prisma.returnEvent.create({
       data: {
         returnId,
-        type: usageRecordId ? 'label.charged' : 'label.charge_failed',
+        type: result ? 'label.charged' : 'label.charge_failed',
         actor: 'system',
         data: {
-          charged: Boolean(usageRecordId),
-          amount,
+          charged: Boolean(result),
+          quantity,
           postage: s.last.postage ?? null,
-          usageRecordId,
-          error: usageRecordId ? null : (error || 'No usage line item or Shopify refused the charge'),
+          meter: result?.meter || BillingService.LABEL_METER_HANDLE,
+          idempotencyKey: BillingService.labelChargeKey(returnId),
+          error: result ? null : (error || 'Shopify did not accept the usage event'),
           retry: Math.max(1, s.attempts),
         },
       },
     }).catch((err) => logger.error({ returnId, err: err.message }, 'Could not record label charge retry'));
-    if (usageRecordId) recovered += 1; else stillFailing += 1;
+    if (result) recovered += 1; else stillFailing += 1;
     await release(claimKey);
   }
 

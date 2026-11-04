@@ -19,6 +19,33 @@ const BASE = 'https://api.goshippo.com';
  * config.credentials = { apiKey }                 // Shippo API token
  * config.settings    = { live, servicelevelToken, carrierLabel, baseUrl }
  */
+// Shippo's tracking states → ours.
+const TRACKING_STATES = {
+  PRE_TRANSIT: 'label_created',
+  TRANSIT: 'in_transit',
+  DELIVERED: 'delivered',
+  RETURNED: 'returned_to_sender',
+  FAILURE: 'failed',
+  UNKNOWN: 'unknown',
+};
+
+// Our carrier codes → Shippo carrier tokens for the tracking endpoint. Shippo
+// still calls Evri "hermes_uk". The test environment tracks the pseudo
+// carrier "shippo" (tracking numbers like SHIPPO_TRANSIT).
+const TRACKING_CARRIER_TOKENS = {
+  evri: 'hermes_uk',
+  hermesuk: 'hermes_uk',
+  hermes: 'hermes_uk',
+  royalmail: 'royal_mail',
+  dpd: 'dpd_uk',
+  dpduk: 'dpd_uk',
+  ups: 'ups',
+  dhl: 'dhl_express',
+  dhlexpress: 'dhl_express',
+  parcelforce: 'parcelforce',
+  shippo: 'shippo',
+};
+
 // Transaction states in which Shippo has accepted the purchase but not yet
 // produced (or refused) the label. Treated as "unknown", never as failed.
 const PENDING_STATES = new Set(['QUEUED', 'WAITING']);
@@ -62,14 +89,58 @@ class ShippoAdapter extends CarrierAdapter {
     return this._isLive ? this._liveLabel(args) : this._simulateLabel();
   }
 
-  async getTrackingStatus() {
+  /**
+   * Where the parcel is, from Shippo's tracking API
+   * (GET /tracks/{carrier}/{tracking_number}). `carrier` is our carrier code
+   * (evri, royalmail…), translated to Shippo's token. Returns
+   * { status, detail, location, lastUpdate, estimatedDelivery, trackingUrl }
+   * with status one of label_created | in_transit | delivered |
+   * returned_to_sender | failed | unknown. Simulation mode (no token) keeps
+   * returning a plausible placeholder; callers check `_isLive` first.
+   */
+  async getTrackingStatus(trackingCode, carrier = null) {
+    if (!this._isLive) {
+      return {
+        status: 'in_transit',
+        detail: null,
+        lastUpdate: new Date(),
+        location: 'Carrier network',
+        estimatedDelivery: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
+        trackingUrl: null,
+        simulated: true,
+      };
+    }
+    const token = ShippoAdapter.trackingCarrierToken(carrier || this._settings.carrierLabel);
+    const res = await fetch(`${this._baseUrl}/tracks/${encodeURIComponent(token)}/${encodeURIComponent(trackingCode)}`, {
+      headers: this._headers(),
+    });
+    // 4xx: Shippo cannot (yet) say anything about this number: not scanned,
+    // or not trackable from this account (Evri/DPD only track labels bought
+    // through Shippo). That is "unknown", not a failure to retry loudly.
+    // 5xx: Shippo itself is struggling; the caller retries next time.
+    if (res.status >= 400 && res.status < 500) {
+      const detail = await res.json().then((b) => b?.detail || b?.message || null).catch(() => null);
+      return { status: 'unknown', detail: detail || 'Not found by the carrier yet', location: null, lastUpdate: null, estimatedDelivery: null, trackingUrl: null };
+    }
+    if (!res.ok) throw new Error(`Shippo tracking failed (${res.status})`);
+    const track = await res.json();
+    const ts = track.tracking_status || null;
+    const loc = ts?.location || {};
+    const location = [loc.city, loc.state, loc.country].filter(Boolean).join(', ') || null;
     return {
-      status: 'in_transit',
-      lastUpdate: new Date(),
-      location: 'Carrier network',
-      estimatedDelivery: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
+      status: TRACKING_STATES[ts?.status] || 'unknown',
+      detail: ts?.status_details || null,
+      location,
+      lastUpdate: ts?.status_date ? new Date(ts.status_date) : null,
+      estimatedDelivery: track.eta ? new Date(track.eta) : null,
       trackingUrl: null,
     };
+  }
+
+  /** Our carrier code → the token Shippo's tracking API expects. */
+  static trackingCarrierToken(carrier) {
+    const key = String(carrier || '').toLowerCase().replace(/[^a-z]/g, '');
+    return TRACKING_CARRIER_TOKENS[key] || String(carrier || 'shippo');
   }
 
   // No live Shippo location finder is wired up yet. Return nothing rather

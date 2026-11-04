@@ -35,6 +35,8 @@ const prismaMockFactory = () => ({
   returnLabel: {
     create: jest.fn(),
     findMany: jest.fn(),
+    update: jest.fn(),
+    updateMany: jest.fn(),
   },
   returnPolicy: {
     findMany: jest.fn(),

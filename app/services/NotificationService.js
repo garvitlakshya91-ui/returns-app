@@ -149,12 +149,33 @@ class NotificationService {
   /**
    * Send return approved notification.
    */
-  static async sendReturnApproved(returnRecord) {
+  static async sendReturnApproved(returnRecord, { withoutLabel = false, returnsAddress = null } = {}) {
     const brand = await NotificationService._branding(returnRecord.shopId);
     return NotificationService.sendEmail({
       to: returnRecord.customerEmail,
       subject: `Return Approved — ${returnRecord.shopifyOrderName}`,
       template: 'ReturnApproved',
+      data: {
+        brand,
+        customerName: returnRecord.customerName,
+        orderName: returnRecord.shopifyOrderName,
+        returnId: returnRecord.id,
+        // No label coming: the customer posts it themselves, to this address.
+        withoutLabel: Boolean(withoutLabel),
+        returnsAddress: withoutLabel ? returnsAddress : null,
+      },
+    });
+  }
+
+  /**
+   * The parcel is back with the merchant: tell the customer.
+   */
+  static async sendReturnReceived(returnRecord) {
+    const brand = await NotificationService._branding(returnRecord.shopId);
+    return NotificationService.sendEmail({
+      to: returnRecord.customerEmail,
+      subject: `We've received your return — ${returnRecord.shopifyOrderName}`,
+      template: 'ReturnReceived',
       data: {
         brand,
         customerName: returnRecord.customerName,

@@ -276,6 +276,7 @@ require('./events/handlers/onReturnCreated');
 require('./events/handlers/onReturnApproved');
 require('./events/handlers/onLabelGenerated');
 require('./events/handlers/onRefundProcessed');
+require('./events/handlers/onReturnReceived');
 require('./events/handlers/onShopInstalled');
 
 // ─── BullMQ workers ───
@@ -296,6 +297,8 @@ if (process.env.REDIS_URL) {
   require('./jobs/retryLabelCharges').startLabelChargeRetries();
   // Finish labels whose follow-up steps stalled (on boot, then every 30 min)
   require('./jobs/recoverLabels').startLabelRecovery();
+  // Ask carriers where outstanding return parcels are (a minute after boot, then every 30 min)
+  require('./jobs/trackParcels').startParcelTracking();
 }
 
 // ─── Error handler ───

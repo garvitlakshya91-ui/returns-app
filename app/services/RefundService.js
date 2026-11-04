@@ -166,7 +166,13 @@ class RefundService {
   static async _persist(returnId, outcome) {
     await prisma.return.update({
       where: { id: returnId },
-      data: { status: 'PROCESSED', refundAmount: outcome.amount, processedAt: new Date() },
+      data: {
+        status: 'PROCESSED',
+        refundAmount: outcome.amount,
+        processedAt: new Date(),
+        // The amount above is in the currency the refund was made in.
+        ...(outcome.currency ? { currency: outcome.currency } : {}),
+      },
     });
     try {
       await prisma.returnEvent.create({
@@ -253,14 +259,15 @@ class RefundService {
       query suggestedRefund($id: ID!, $refundLineItems: [RefundLineItemInput!]!) {
         order(id: $id) {
           currencyCode
+          presentmentCurrencyCode
           suggestedRefund(refundLineItems: $refundLineItems, refundShipping: false) {
-            maximumRefundableSet { shopMoney { amount } }
-            subtotalSet { shopMoney { amount } }
-            totalTaxSet { shopMoney { amount } }
+            maximumRefundableSet { shopMoney { amount } presentmentMoney { amount } }
+            subtotalSet { shopMoney { amount } presentmentMoney { amount } }
+            totalTaxSet { shopMoney { amount } presentmentMoney { amount } }
             suggestedTransactions {
               kind
               gateway
-              amountSet { shopMoney { amount } }
+              amountSet { shopMoney { amount } presentmentMoney { amount } }
               parentTransaction { id }
             }
           }
@@ -271,9 +278,13 @@ class RefundService {
     const order = resp.data?.order;
     const s = order?.suggestedRefund;
     if (!s) throw new Error('Shopify could not calculate a refund for this order');
-    const money = (set) => round2(set?.shopMoney?.amount || 0);
+    // Refunds go back in the currency the customer paid in (the order's
+    // presentment currency). A store selling in several currencies has
+    // payments in GBP on a USD shop; Shopify refuses a refund transaction in
+    // the wrong one ("Currency must match parent transaction").
+    const money = (set) => round2((set?.presentmentMoney ?? set?.shopMoney)?.amount || 0);
     return {
-      currency: order.currencyCode || returnRecord.currency || 'GBP',
+      currency: order.presentmentCurrencyCode || order.currencyCode || returnRecord.currency || 'GBP',
       gross: round2(money(s.subtotalSet) + money(s.totalTaxSet)),
       maximumRefundable: money(s.maximumRefundableSet),
       transactions: (s.suggestedTransactions || [])
@@ -311,6 +322,9 @@ class RefundService {
 
     const input = {
       orderId: returnRecord.shopifyOrderId,
+      // Required by Shopify when the customer paid in a currency other than
+      // the shop's; harmless otherwise.
+      currency: suggested.currency,
       note: refundNote(returnRecord.id),
       shipping: { fullRefund: false },
       refundLineItems: suggested.refundLineItems,
@@ -324,11 +338,11 @@ class RefundService {
     };
 
     const refund = await RefundService._refundCreate(client, returnRecord.id, input);
-    const refunded = round2(refund.totalRefundedSet?.shopMoney?.amount || 0);
+    const refunded = round2((refund.totalRefundedSet?.presentmentMoney ?? refund.totalRefundedSet?.shopMoney)?.amount || 0);
     if (amount > 0 && refunded <= 0) {
       throw new Error(`Shopify created refund ${refund.id} but moved no money. Check the order in Shopify before retrying.`);
     }
-    return { shopifyRefundId: refund.id, amount: refunded, method: 'original_payment' };
+    return { shopifyRefundId: refund.id, amount: refunded, method: 'original_payment', currency: suggested.currency };
   }
 
   /**
@@ -338,6 +352,7 @@ class RefundService {
   static async _refundToStoreCredit(client, returnRecord, amount, currency) {
     const input = {
       orderId: returnRecord.shopifyOrderId,
+      currency,
       note: refundNote(returnRecord.id),
       shipping: { fullRefund: false },
       refundLineItems: returnRecord.items.map((item) => ({
@@ -350,7 +365,7 @@ class RefundService {
     };
 
     const refund = await RefundService._refundCreate(client, returnRecord.id, input);
-    return { shopifyRefundId: refund.id, amount, method: 'store_credit' };
+    return { shopifyRefundId: refund.id, amount, method: 'store_credit', currency };
   }
 
   static async _refundCreate(client, returnId, input) {
@@ -359,7 +374,7 @@ class RefundService {
         refundCreate(input: $input) @idempotent(key: "${idempotencyKey(returnId)}") {
           refund {
             id
-            totalRefundedSet { shopMoney { amount currencyCode } }
+            totalRefundedSet { shopMoney { amount currencyCode } presentmentMoney { amount currencyCode } }
           }
           userErrors { field message }
         }

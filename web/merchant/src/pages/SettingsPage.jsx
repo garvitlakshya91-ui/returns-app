@@ -31,7 +31,7 @@ export default function SettingsPage() {
   async function loadSettings() {
     try {
       const data = await settingsApi.get();
-      setShopInfo({ name: data.name, email: data.email, plan: data.plan });
+      setShopInfo({ name: data.name, email: data.email, plan: data.plan, portalUrl: data.portalUrl || '', themeEditorUrl: data.themeEditorUrl || '' });
       setSettings(data.settings || {});
     } catch (err) {
       console.error('Load settings error:', err);
@@ -54,6 +54,31 @@ export default function SettingsPage() {
 
   function updateSetting(key, value) {
     setSettings((prev) => ({ ...prev, [key]: value }));
+  }
+
+  // Liquid for Shopify's order notification templates: `order_name` and
+  // `customer.email` are available there, so the portal opens prefilled.
+  const emailSnippet = shopInfo.portalUrl
+    ? `<a href="${shopInfo.portalUrl}?order={{ order_name | remove: '#' }}&email={{ customer.email | url_encode }}">Start a return</a>`
+    : '';
+  const [snippetCopied, setSnippetCopied] = useState(false);
+  // Opening the theme editor or copying the snippet ticks the setup guide's
+  // "add a Start a return button" step.
+  function markStorefrontLinkAdded() {
+    if (settings.storefrontLinkAdded) return;
+    const next = { ...settings, storefrontLinkAdded: true };
+    setSettings(next);
+    settingsApi.update(next).catch(() => {});
+  }
+  async function copySnippet() {
+    try {
+      await navigator.clipboard.writeText(emailSnippet);
+      setSnippetCopied(true);
+      setTimeout(() => setSnippetCopied(false), 2000);
+      markStorefrontLinkAdded();
+    } catch {
+      /* clipboard unavailable */
+    }
   }
 
   if (loading) {
@@ -88,6 +113,50 @@ export default function SettingsPage() {
               <Text>Name: {shopInfo.name || '—'}</Text>
               <Text>Email: {shopInfo.email || '—'}</Text>
               <Text>Plan: {shopInfo.plan || 'FREE'}</Text>
+            </BlockStack>
+          </Card>
+        </Layout.Section>
+
+        {/* Where customers find the portal */}
+        <Layout.Section>
+          <Card>
+            <BlockStack gap="300">
+              <Text variant="headingMd" as="h2">Let customers find your portal</Text>
+              <Text tone="subdued">
+                Your returns portal is at {shopInfo.portalUrl ? <strong>{shopInfo.portalUrl}</strong> : 'the address shown on your dashboard'}. Put a link to it where customers look for it:
+              </Text>
+
+              <BlockStack gap="150">
+                <Text fontWeight="semibold">1. A "Start a return" button on your store</Text>
+                <Text tone="subdued">
+                  ReturnFlow adds a block to your theme editor. {shopInfo.themeEditorUrl
+                    ? 'Open the editor with the block ready to place, then drag it where you want it (the footer or your returns page work well) and save.'
+                    : 'Open Online Store → Themes → Customize, pick a page, click Add block → Apps → Start a return, place it (the footer or your returns page work well) and save.'}
+                </Text>
+                <InlineStack gap="200">
+                  {shopInfo.themeEditorUrl ? (
+                    <Button url={shopInfo.themeEditorUrl} target="_blank" variant="primary" onClick={markStorefrontLinkAdded}>Add the button in the theme editor</Button>
+                  ) : (
+                    <Button url="shopify://admin/themes/current/editor" target="_top" onClick={markStorefrontLinkAdded}>Open the theme editor</Button>
+                  )}
+                </InlineStack>
+              </BlockStack>
+
+              <BlockStack gap="150">
+                <Text fontWeight="semibold">2. A link in your order emails</Text>
+                <Text tone="subdued">
+                  Paste this into your order confirmation or shipping confirmation email (Settings → Notifications in Shopify). It opens the portal with the customer's order already filled in.
+                </Text>
+                <TextField
+                  label="Email snippet"
+                  labelHidden
+                  value={emailSnippet}
+                  readOnly
+                  multiline={2}
+                  autoComplete="off"
+                  connectedRight={<Button onClick={copySnippet}>{snippetCopied ? 'Copied' : 'Copy'}</Button>}
+                />
+              </BlockStack>
             </BlockStack>
           </Card>
         </Layout.Section>

@@ -12,8 +12,14 @@ const { claim, release } = require('../utils/idempotency');
 const REAL_ORDER_GID = /^gid:\/\/shopify\/Order\/\d+$/;
 
 // Shown to the merchant when a managed label can't be charged back to them.
-const MANAGED_LABEL_BLOCKED_MESSAGE = 'No label was bought: managed labels need billing set up on your plan. '
-  + 'Connect your own carrier account in Settings, or upgrade your plan.';
+// Why a managed label could not be bought, in the merchant's words.
+function managedLabelBlockedMessage(reason) {
+  const BillingService = require('./BillingService');
+  return `No label was bought: ${BillingService.labelBillingMessage(reason)}`;
+}
+const NO_LABEL_SOURCE_MESSAGE = 'No label was bought: turn on managed return labels on the Dashboard, or connect your own carrier in Settings.';
+const NO_LABEL_SOURCE_APPROVAL_MESSAGE = 'Returns need a way to get a label before they are approved: turn on managed return labels on the Dashboard, '
+  + 'connect your own carrier in Settings, or approve this return without a label (the customer posts it back at their own cost).';
 const LABEL_NO_RETURNS_ADDRESS_MESSAGE = 'No label was bought: add your returns address in Settings '
   + '(Warehouse address), or set your store address in Shopify.';
 const LABEL_NO_CUSTOMER_ADDRESS_MESSAGE = 'No label was bought: this order has no shipping address to collect the return from.';
@@ -72,6 +78,14 @@ class LabelService {
     if (!returnRecord) throw new Error(`Return ${returnId} not found`);
 
     const shop = returnRecord.shop;
+    // No carrier at all means no real label: say so rather than hand the
+    // customer a simulated one.
+    if (LabelService.labelSource(shop).kind === 'none') {
+      const err = new Error(NO_LABEL_SOURCE_MESSAGE);
+      err.code = 'LABEL_SOURCE_MISSING';
+      eventBus.emit(LABEL_FAILED, { returnId, error: err.message, code: err.code });
+      throw err;
+    }
     const adapter = LabelService.getCarrierAdapter(shop);
 
     // Managed-platform = an aggregator carrier the merchant did NOT bring their
@@ -129,11 +143,11 @@ class LabelService {
       const BillingService = require('./BillingService');
       billing.managedBilling = await BillingService.managedLabelBilling(shop);
       if (!billing.managedBilling.allowed) {
-        const err = new Error(MANAGED_LABEL_BLOCKED_MESSAGE);
+        const err = new Error(managedLabelBlockedMessage(billing.managedBilling.reason));
         err.code = 'MANAGED_LABEL_BILLING';
         err.reason = billing.managedBilling.reason;
-        logger.warn({ returnId, reason: billing.managedBilling.reason }, 'Managed label not bought: merchant cannot be charged');
-        eventBus.emit(LABEL_FAILED, { returnId, error: err.message, code: err.code });
+        logger.warn({ returnId, reason: billing.managedBilling.reason }, 'Managed label not bought: merchant cannot be billed');
+        eventBus.emit(LABEL_FAILED, { returnId, error: err.message, code: err.code, reason: err.reason });
         throw err;
       }
     }
@@ -305,14 +319,14 @@ class LabelService {
     // (a failed charge belongs to the retry worker from then on).
     if (!has('label.charged') && !has('label.charge_failed')) {
       const dueEvent = ledger.filter((e) => e.type === 'label.charge_due').pop();
-      const due = dueEvent ? dueEvent.data : await LabelService._chargeDue(label, { shop, billing, labelResult });
-      if (due && Number(due.amount) > 0) {
+      const due = dueEvent ? dueEvent.data : await LabelService._chargeDue(label, { billing, labelResult });
+      if (due && Number(due.quantity) > 0) {
         if (!dueEvent) {
           await prisma.returnEvent.create({
-            data: { returnId, type: 'label.charge_due', actor: 'system', data: { amount: due.amount, postage: due.postage } },
+            data: { returnId, type: 'label.charge_due', actor: 'system', data: { quantity: due.quantity, postage: due.postage } },
           });
         }
-        await LabelService._chargeLabel(returnId, shop, label.carrier, returnRecord, due);
+        await LabelService._chargeLabel(returnId, shop, due);
       }
     }
 
@@ -366,56 +380,48 @@ class LabelService {
   }
 
   /**
-   * What a managed label costs the merchant, or null when nothing is owed:
-   * bring-your-own carriers, simulated labels and development stores are
-   * never charged. On a resume (no labelResult) the saved row stands in: a
-   * live label has a PDF, a simulated one does not.
+   * Is this label billable to the merchant's plan meter? Only labels bought
+   * on ReturnFlow's carrier account (managed), and only real ones: a
+   * bring-your-own carrier is the merchant's own cost, a simulated label has
+   * no parcel. Development stores are reported too (their plans are $0), so
+   * the flow is the same one real merchants get. On a resume (no
+   * labelResult) the saved row stands in: a live label has a PDF.
    */
-  static async _chargeDue(label, { shop, billing, labelResult }) {
+  static async _chargeDue(label, { billing, labelResult }) {
     if (!billing?.isManagedPlatform) return null;
     const cost = Number(labelResult ? labelResult.cost : label.cost);
     const simulated = labelResult ? Boolean(labelResult.simulated) : !label.labelUrl;
     if (simulated || !(cost > 0)) return null;
-    const BillingService = require('./BillingService');
-    let managed = billing.managedBilling;
-    if (!managed) managed = await BillingService.managedLabelBilling(shop);
-    if (managed?.devStore) return null;
-    return { amount: Math.round((cost + BillingService.LABEL_FEE_GBP) * 100) / 100, postage: cost };
+    return { quantity: 1, postage: cost };
   }
 
   /**
-   * Bill the merchant for a real managed label (postage + service fee) via
-   * a Shopify usage charge. Isolated in its own try/catch: the label already
-   * exists and the return is LABEL_SENT, so a billing hiccup must never turn
-   * a successful label into LABEL_FAILED. Writes the outcome to the ledger.
+   * Report the label to the merchant's plan meter (one billable event;
+   * Shopify adds the per-label price to their monthly bill). Isolated in its
+   * own try/catch: the label already exists and the return is LABEL_SENT, so
+   * a billing hiccup must never turn a successful label into LABEL_FAILED.
+   * The outcome goes on the ledger either way; a failure is retried by
+   * jobs/retryLabelCharges with the same idempotency key.
    */
-  static async _chargeLabel(returnId, shop, carrier, returnRecord, { amount, postage }) {
+  static async _chargeLabel(returnId, shop, { quantity, postage }) {
     const BillingService = require('./BillingService');
-    let usageRecordId = null;
+    let result = null;
     let chargeError = null;
     try {
-      usageRecordId = await BillingService.recordLabelCharge(shop, {
-        amount,
-        description: `Return label ${carrier} ${returnRecord.shopifyOrderName}`,
-        // Shopify refuses a second charge with the same key, so a retry
-        // (ours or a parallel worker's) can never bill the label twice.
-        idempotencyKey: BillingService.labelChargeKey(returnId),
-      });
+      result = await BillingService.reportLabelUsage(shop, { returnId, quantity });
     } catch (billingErr) {
       chargeError = billingErr.message;
-      logger.warn({ err: billingErr.message, returnId }, 'Managed-label billing failed after label creation (non-fatal)');
+      logger.warn({ err: billingErr.message, returnId }, 'Label usage could not be reported (non-fatal)');
     }
-    // Ledger entry on the return's timeline: every managed label's
-    // postage is either charged (with Shopify's usage record id) or
-    // recorded as unrecovered, so nothing is silently absorbed.
     await LabelService._recordCharge(returnId, {
-      charged: Boolean(usageRecordId),
-      amount,
+      charged: Boolean(result?.reported),
+      quantity,
       postage: Number(postage),
-      usageRecordId,
-      error: chargeError || (usageRecordId ? null : 'No usage line item or Shopify refused the charge'),
+      meter: result?.meter || BillingService.LABEL_METER_HANDLE,
+      idempotencyKey: BillingService.labelChargeKey(returnId),
+      error: chargeError,
     });
-    return usageRecordId;
+    return result;
   }
 
   /**
@@ -453,6 +459,45 @@ class LabelService {
     } catch (err) {
       logger.error({ returnId, err: err.message }, 'Could not record managed-label charge');
     }
+  }
+
+  /**
+   * Where this shop's labels come from:
+   *  - 'managed': an aggregator (Shippo/ShipEngine) on ReturnFlow's account, billed per label
+   *  - 'own':     a carrier the merchant connected with their own credentials
+   *  - 'none':    nothing set up; approving needs "without a label"
+   */
+  static labelSource(shop) {
+    // The same config getCarrierAdapter() will use: the first active one.
+    const config = (shop?.carrierConfigs || []).find((c) => c.isActive);
+    if (!config) return { kind: 'none', carrier: null };
+    const aggregator = ['shippo', 'shipengine'].includes(config.carrier);
+    if (aggregator && !config.credentials?.encrypted) return { kind: 'managed', carrier: config.carrier };
+    return { kind: 'own', carrier: config.carrier };
+  }
+
+  /**
+   * The address customers post returns to, for emails that have to spell it
+   * out: the warehouse address in Settings, else the store's own address on
+   * Shopify. Null when neither is usable.
+   */
+  static async returnsAddress(shop) {
+    const s = shop?.settings || {};
+    if (s.warehouseLine1 && s.warehousePostcode) {
+      return { name: shop.name, line1: s.warehouseLine1, city: s.warehouseCity || '', postcode: s.warehousePostcode };
+    }
+    if (!shop?.shopifyToken) return null;
+    try {
+      const client = await ShopToken.graphqlClient(shop);
+      const resp = await client.request('{ shop { billingAddress { address1 address2 city zip } } }');
+      const a = resp.data?.shop?.billingAddress;
+      if (a?.address1 && a?.zip) {
+        return { name: shop.name, line1: [a.address1, a.address2].filter(Boolean).join(', '), city: a.city || '', postcode: a.zip };
+      }
+    } catch (err) {
+      logger.warn({ shop: shop.shopifyDomain, err: err.message }, 'Could not read the store address');
+    }
+    return null;
   }
 
   /**
@@ -685,5 +730,7 @@ class LabelService {
 }
 
 LabelService.RETURNS_ADDRESS_REQUIRED_MESSAGE = RETURNS_ADDRESS_REQUIRED_MESSAGE;
+LabelService.NO_LABEL_SOURCE_MESSAGE = NO_LABEL_SOURCE_MESSAGE;
+LabelService.NO_LABEL_SOURCE_APPROVAL_MESSAGE = NO_LABEL_SOURCE_APPROVAL_MESSAGE;
 
 module.exports = LabelService;

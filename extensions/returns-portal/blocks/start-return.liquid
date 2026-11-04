@@ -1,0 +1,82 @@
+{%- comment -%}
+  Start a return — an app block that sends customers to this shop's
+  ReturnFlow portal. The portal address is derived from the shop's
+  myshopify domain, so nothing needs configuring. A logged-in customer's
+  email is passed along to prefill the lookup form.
+{%- endcomment -%}
+{%- assign shop_slug = shop.permanent_domain | split: '.' | first -%}
+{%- assign portal_url = 'https://app.returnsflow.uk/portal/' | append: shop_slug -%}
+{%- if customer -%}
+  {%- assign portal_url = portal_url | append: '?email=' | append: customer.email | url_encode -%}
+{%- endif -%}
+
+<div class="returnflow-start-return" style="text-align: {{ block.settings.alignment }}; padding: {{ block.settings.padding }}px 0;" {{ block.shopify_attributes }}>
+  {%- if block.settings.heading != blank -%}
+    <h2 class="returnflow-start-return__heading" style="margin: 0 0 8px;">{{ block.settings.heading | escape }}</h2>
+  {%- endif -%}
+  {%- if block.settings.text != blank -%}
+    <p class="returnflow-start-return__text" style="margin: 0 0 16px;">{{ block.settings.text | escape }}</p>
+  {%- endif -%}
+  <a class="returnflow-start-return__button button {{ block.settings.button_style }}" href="{{ portal_url }}" target="_blank" rel="noopener">
+    {{ block.settings.button_label | default: 'Start a return' | escape }}
+  </a>
+</div>
+
+{% schema %}
+{
+  "name": "Start a return",
+  "target": "section",
+  "stylesheet": "start-return.css",
+  "settings": [
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Heading",
+      "default": "Need to return something?"
+    },
+    {
+      "type": "textarea",
+      "id": "text",
+      "label": "Text",
+      "default": "Start your return online in under a minute. We'll email you a prepaid label."
+    },
+    {
+      "type": "text",
+      "id": "button_label",
+      "label": "Button label",
+      "default": "Start a return"
+    },
+    {
+      "type": "select",
+      "id": "button_style",
+      "label": "Button style",
+      "options": [
+        { "value": "button--primary", "label": "Primary" },
+        { "value": "button--secondary", "label": "Secondary" }
+      ],
+      "default": "button--primary"
+    },
+    {
+      "type": "select",
+      "id": "alignment",
+      "label": "Alignment",
+      "options": [
+        { "value": "left", "label": "Left" },
+        { "value": "center", "label": "Centre" },
+        { "value": "right", "label": "Right" }
+      ],
+      "default": "center"
+    },
+    {
+      "type": "range",
+      "id": "padding",
+      "label": "Vertical padding",
+      "min": 0,
+      "max": 80,
+      "step": 4,
+      "unit": "px",
+      "default": 24
+    }
+  ]
+}
+{% endschema %}

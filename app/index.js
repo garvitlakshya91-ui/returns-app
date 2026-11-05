@@ -50,11 +50,22 @@ app.use(helmet({
 // Per-request CSP:
 //  - /admin (Shopify embed): scope frame-ancestors to the requesting shop +
 //    admin.shopify.com so the embed works but no other origin can frame us.
-//  - /portal and everywhere else: deny framing entirely, lock script-src to
-//    self + the R2 public host (for hosted QR images / labels), restrict
-//    img-src to self, data:, and R2. This shuts clickjacking + script
-//    injection paths on the public customer portal.
+//  - /portal and everywhere else: only Shopify's own origins may frame the
+//    portal. The storefront "Start a return" block opens it in a new tab,
+//    but inside the theme editor the preview is a frame on admin.shopify.com
+//    (storefront frame within it), and clicks there stay in that frame; with
+//    framing denied outright the editor showed ERR_BLOCKED_BY_RESPONSE. No
+//    other origin can frame it, so clickjacking stays shut. script-src is
+//    locked to self; img-src to self, data:, and R2 (hosted QR / labels).
 const R2_PUBLIC = process.env.R2_PUBLIC_URL || '';
+const PORTAL_FRAME_ANCESTORS = [
+  "'self'",
+  'https://*.myshopify.com',
+  'https://admin.shopify.com',
+  'https://*.shopify.com',
+  'https://*.shopifypreview.com',
+  'https://*.shopifyapps.com',
+].join(' ');
 app.use((req, res, next) => {
   const shop = req.query.shop;
   if (shop && /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(String(shop))) {
@@ -73,7 +84,7 @@ app.use((req, res, next) => {
         `img-src ${imgSrc}`,
         "connect-src 'self'",
         "font-src 'self' data:",
-        "frame-ancestors 'none'",
+        `frame-ancestors ${PORTAL_FRAME_ANCESTORS}`,
         "base-uri 'self'",
         "form-action 'self'",
       ].join('; '),

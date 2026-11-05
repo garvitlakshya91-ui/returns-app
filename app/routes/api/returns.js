@@ -78,7 +78,7 @@ router.get('/stats', async (req, res) => {
  *  - LABEL_BILLING: managed labels, but no plan to bill them to (reason +
  *    the plan page to fix it)
  */
-async function approvalBlocker(shopId, withoutLabel) {
+async function approvalBlocker(shopId, withoutLabel, returnRecord = null) {
   const LabelService = require('../../services/LabelService');
   const shop = await prisma.shop.findUnique({ where: { id: shopId }, include: { carrierConfigs: true } });
   if (!shop || !(await LabelService.hasReturnsAddress(shop))) {
@@ -88,6 +88,13 @@ async function approvalBlocker(shopId, withoutLabel) {
   const source = LabelService.labelSource(shop);
   if (source.kind === 'none') {
     return { error: LabelService.NO_LABEL_SOURCE_APPROVAL_MESSAGE, code: 'LABEL_SOURCE_MISSING' };
+  }
+  // A label is a parcel booking from the customer's address. An order made
+  // without one (easy to do in the admin) would be approved and then fail at
+  // the label step; say so now instead, with "approve without a label" as the
+  // way through. (Bulk approvals skip this per-order check.)
+  if (returnRecord && !(await LabelService.orderHasShippingAddress(shop, returnRecord))) {
+    return { error: LabelService.ORDER_ADDRESS_APPROVAL_MESSAGE, code: 'ORDER_ADDRESS_MISSING' };
   }
   if (source.kind === 'managed') {
     const BillingService = require('../../services/BillingService');
@@ -274,7 +281,7 @@ router.put('/:id/approve', async (req, res) => {
     // that then fails. "withoutLabel" skips the label: the customer is asked
     // to post the item back at their own cost.
     const withoutLabel = Boolean(req.body?.withoutLabel);
-    const refusal = await approvalBlocker(req.shopId, withoutLabel);
+    const refusal = await approvalBlocker(req.shopId, withoutLabel, returnRecord);
     if (refusal) return res.status(409).json(refusal);
 
     const updated = await prisma.return.update({
@@ -422,7 +429,9 @@ router.put('/:id/process', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('Process refund error:', err);
-    res.status(500).json({ error: err.message || 'Failed to process refund' });
+    // Shopify refused for a reason the merchant has to act on: not a 500.
+    const status = err.code === 'NO_REFUNDABLE_PAYMENT' ? 409 : 500;
+    res.status(status).json({ error: err.message || 'Failed to process refund', code: err.code || undefined });
   }
 });
 

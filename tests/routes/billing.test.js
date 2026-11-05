@@ -35,6 +35,37 @@ describe('GET /api/admin/billing/plans', () => {
   });
 });
 
+describe('GET /api/admin/billing/labels', () => {
+  const devStore = (dev) => ({ data: { shop: { plan: { partnerDevelopment: dev } } } });
+  const subs = (list) => ({ data: { currentAppInstallation: { activeSubscriptions: list } } });
+
+  it('reports an active plan with no message', async () => {
+    shopifyClient.request.mockResolvedValueOnce(devStore(false)).mockResolvedValueOnce(subs([{ name: 'Preview', status: 'ACTIVE' }]));
+    const res = await request(app).get('/api/admin/billing/labels');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      allowed: true, devStore: false, reason: null, plan: 'Preview', message: null,
+      planUrl: 'https://admin.shopify.com/store/test-shop/charges/returns-app-garvit-20260613/pricing_plans',
+    });
+  });
+
+  it('tells a store with no plan how to fix it, with the hosted plan page', async () => {
+    shopifyClient.request.mockResolvedValueOnce(devStore(false)).mockResolvedValueOnce(subs([]));
+    const res = await request(app).get('/api/admin/billing/labels');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ allowed: false, reason: 'no_active_plan' });
+    expect(res.body.message).toMatch(/choose a plan/i);
+    expect(res.body.planUrl).toMatch(/pricing_plans$/);
+  });
+
+  it('never 500s: a failed check is reported as a reason', async () => {
+    shopifyClient.request.mockRejectedValue(new Error('Shopify down'));
+    const res = await request(app).get('/api/admin/billing/labels');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ allowed: false, reason: 'billing_check_failed' });
+  });
+});
+
 describe('POST /api/admin/billing/subscribe — paid plan', () => {
   it('400 on an unknown plan', async () => {
     const res = await request(app).post('/api/admin/billing/subscribe').send({ plan: 'WAT' });

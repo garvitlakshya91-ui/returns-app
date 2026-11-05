@@ -19,6 +19,24 @@ const MANAGED_PRICING_RE = /managed pricing|app pricing/i;
 const { pricingPlansUrl } = require('../../services/BillingService');
 
 /**
+ * GET /api/admin/billing/labels
+ * Can managed return labels be bought for this store right now? Under
+ * Shopify App Pricing nothing forces a merchant to pick a plan at install,
+ * so a store can reach the dashboard with no subscription at all. The
+ * dashboard setup guide shows this as a "Choose a plan" step (with the
+ * hosted plan page) so the gap is fixed before the first approval, not
+ * discovered as an error on it.
+ */
+router.get('/labels', async (req, res) => {
+  const billing = await BillingService.managedLabelBilling(req.shop);
+  res.json({
+    ...billing,
+    planUrl: pricingPlansUrl(req.shopDomain),
+    message: billing.allowed ? null : BillingService.labelBillingMessage(billing.reason),
+  });
+});
+
+/**
  * GET /api/admin/billing/plans
  */
 router.get('/plans', (req, res) => {

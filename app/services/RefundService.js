@@ -317,7 +317,11 @@ class RefundService {
   static async _refundToOriginalPayment(client, returnRecord, amount, suggested) {
     const transactions = RefundService._allocate(amount, suggested.transactions);
     if (amount > 0 && transactions.length === 0) {
-      throw new Error('No refundable payment found on this order — refund it in Shopify directly');
+      // A merchant problem (unpaid or already-refunded order), not a crash:
+      // the route answers 409 so the dashboard explains instead of erroring.
+      const err = new Error('No refundable payment found on this order (it is unpaid or already refunded) — refund it in Shopify directly');
+      err.code = 'NO_REFUNDABLE_PAYMENT';
+      throw err;
     }
 
     const input = {

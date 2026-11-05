@@ -29,6 +29,8 @@ beforeEach(() => {
   // Approval checks the shop has a returns address (LabelService has its own tests)
   labelService = {
     hasReturnsAddress: jest.fn().mockResolvedValue(true),
+    orderHasShippingAddress: jest.fn().mockResolvedValue(true),
+    ORDER_ADDRESS_APPROVAL_MESSAGE: 'This order has no shipping address, so a return label cannot be booked for it. Add one to the order in Shopify, or approve without a label.',
     labelSource: jest.fn(() => ({ kind: 'managed', carrier: 'shippo' })),
     RETURNS_ADDRESS_REQUIRED_MESSAGE: 'Set your returns address before approving returns: Settings → Warehouse address.',
     NO_LABEL_SOURCE_APPROVAL_MESSAGE: 'Returns need a way to get a label before they are approved: turn on managed return labels, connect your own carrier, or approve this return without a label.',
@@ -135,6 +137,16 @@ describe('PUT /api/admin/returns/:id/approve', () => {
     expect(billingService.managedLabelBilling).not.toHaveBeenCalled();
   });
 
+  it('409 ORDER_ADDRESS_MISSING when the order has no shipping address to book the label from', async () => {
+    labelService.orderHasShippingAddress.mockResolvedValue(false);
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'REQUESTED' }));
+    const res = await request(app).put('/api/admin/returns/r1/approve');
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: expect.stringMatching(/approve without a label/), code: 'ORDER_ADDRESS_MISSING' });
+    expect(prisma.return.update).not.toHaveBeenCalled();
+    expect(labelService.orderHasShippingAddress).toHaveBeenCalledTimes(1);
+  });
+
   it('409 LABEL_BILLING with the plan page when managed labels have no plan to bill to', async () => {
     billingService.managedLabelBilling.mockResolvedValue({ allowed: false, devStore: false, reason: 'no_active_plan', plan: null });
     prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'REQUESTED' }));
@@ -219,6 +231,17 @@ describe('PUT /api/admin/returns/:id/process', () => {
     const res = await request(app).put('/api/admin/returns/r1/process');
     expect(res.status).toBe(200);
     expect(res.body).toEqual(expect.objectContaining({ success: true, type: 'REFUND' }));
+  });
+
+  it('409 (not 500) when the order has no payment to refund: a merchant problem with a code', async () => {
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ status: 'RECEIVED' }));
+    const RefundService = require('../../app/services/RefundService');
+    const err = new Error('No refundable payment found on this order (it is unpaid or already refunded) — refund it in Shopify directly');
+    err.code = 'NO_REFUNDABLE_PAYMENT';
+    RefundService.processRefund.mockRejectedValue(err);
+    const res = await request(app).put('/api/admin/returns/r1/process');
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: expect.stringMatching(/unpaid or already refunded/), code: 'NO_REFUNDABLE_PAYMENT' });
   });
 
   it('500 propagates RefundService failures with the message', async () => {

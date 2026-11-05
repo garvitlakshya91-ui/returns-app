@@ -205,10 +205,17 @@ async function shopGid(shop) {
   const resp = await client.request('{ shop { id } }');
   const id = resp.data?.shop?.id;
   if (!id) throw new Error('Could not read the shop id from Shopify');
-  await prisma.shop.update({
-    where: { id: shop.id },
-    data: { settings: { ...(shop.settings || {}), shopifyShopId: id } },
-  }).catch((err) => logger.warn({ shop: shop.shopifyDomain, err: err.message }, 'Could not cache the shop id'));
+  // Merge into the settings as they are NOW, not the snapshot this label job
+  // started with: a merchant saving their address meanwhile must not lose it.
+  try {
+    const fresh = await prisma.shop.findUnique({ where: { id: shop.id }, select: { settings: true } });
+    await prisma.shop.update({
+      where: { id: shop.id },
+      data: { settings: { ...((fresh && fresh.settings) || shop.settings || {}), shopifyShopId: id } },
+    });
+  } catch (err) {
+    logger.warn({ shop: shop.shopifyDomain, err: err.message }, 'Could not cache the shop id');
+  }
   return id;
 }
 

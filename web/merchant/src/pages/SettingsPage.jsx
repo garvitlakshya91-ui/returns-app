@@ -249,6 +249,7 @@ export default function SettingsPage() {
                 value={settings.warehousePostcode || ''}
                 onChange={(v) => updateSetting('warehousePostcode', v)}
                 autoComplete="off"
+                helpText="A UK postcode: return labels are posted within the UK. Leave the whole address blank to use your store's address from Shopify."
               />
             </BlockStack>
           </Card>

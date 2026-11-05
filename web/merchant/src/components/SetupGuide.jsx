@@ -11,7 +11,11 @@ import {
   Badge,
 } from '@shopify/polaris';
 import { CheckCircleIcon, MinusCircleIcon } from '@shopify/polaris-icons';
-import { settingsApi, carriersApi, policiesApi } from '../api';
+import { settingsApi, carriersApi, policiesApi, billingApi } from '../api';
+
+// Managed-label backends (ReturnFlow's own carrier account): active without
+// any merchant credentials, so they count as a connected carrier.
+const MANAGED_CARRIERS = ['shippo', 'shipengine'];
 
 // First-run onboarding checklist, shown on the Dashboard until the merchant
 // finishes setup (or dismisses it). Completion is derived from live data — no
@@ -25,13 +29,17 @@ export default function SetupGuide() {
   const [portalUrl, setPortalUrl] = useState('');
   const [copied, setCopied] = useState(false);
   const [dismissed, setDismissed] = useState(true); // assume hidden until loaded
+  // null until known; a failed check must not block the merchant here (the
+  // approval itself re-checks and explains).
+  const [labelBilling, setLabelBilling] = useState(null);
 
   const load = useCallback(async () => {
     try {
-      const [settingsData, carriers, policies] = await Promise.all([
+      const [settingsData, carriers, policies, billing] = await Promise.all([
         settingsApi.get(),
         carriersApi.list().catch(() => []),
         policiesApi.list().catch(() => []),
+        billingApi.labels().catch(() => null),
       ]);
       const policyList = Array.isArray(policies) ? policies : (policies?.policies || []);
       setHasPolicy(policyList.some((p) => p.isActive));
@@ -39,8 +47,10 @@ export default function SetupGuide() {
       setSettings(s);
       setPortalUrl(settingsData.portalUrl || '');
       setDismissed(!!s.setupGuideDismissed);
+      setLabelBilling(billing);
       setHasCarrier(
-        Array.isArray(carriers) && carriers.some((c) => c.isActive && c.hasCredentials),
+        Array.isArray(carriers)
+          && carriers.some((c) => c.isActive && (c.hasCredentials || MANAGED_CARRIERS.includes(c.carrier))),
       );
     } catch (err) {
       console.error('Setup guide load error:', err);
@@ -57,7 +67,28 @@ export default function SetupGuide() {
   const warehouseSet = !!(settings.warehouseLine1 && settings.warehousePostcode);
   const branded = !!(settings.portalHeading || settings.primaryColor || settings.supportEmail);
 
+  // Shopify does not force a plan choice at install, but return labels are
+  // billed per label through the plan, so a store with no plan cannot buy one.
+  const needsPlan = labelBilling?.allowed === false && labelBilling?.reason === 'no_active_plan';
+  const planDescription = needsPlan
+    ? 'Return labels are added to your Shopify bill through your plan, so pick one first. The Free plan has no monthly fee.'
+    : labelBilling?.devStore
+      ? 'Development stores get every plan free, so labels cost nothing here.'
+      : labelBilling?.plan
+        ? `You're on the ${labelBilling.plan} plan.`
+        : 'Return labels are billed per label through your plan. The Free plan has no monthly fee.';
+
   const steps = [
+    {
+      key: 'plan',
+      title: 'Choose a plan',
+      description: planDescription,
+      done: !needsPlan,
+      required: true,
+      action: labelBilling?.planUrl
+        ? { label: needsPlan ? 'Choose a plan' : 'View plans', url: labelBilling.planUrl, external: true }
+        : null,
+    },
     {
       key: 'carrier',
       title: 'Connect a carrier',
@@ -171,7 +202,12 @@ export default function SetupGuide() {
                 </BlockStack>
               </InlineStack>
               {step.action && (
-                <Button onClick={step.action.onClick} variant={step.done ? 'tertiary' : 'primary'}>
+                <Button
+                  onClick={step.action.onClick}
+                  url={step.action.url}
+                  external={step.action.external}
+                  variant={step.done ? 'tertiary' : 'primary'}
+                >
                   {step.action.label}
                 </Button>
               )}

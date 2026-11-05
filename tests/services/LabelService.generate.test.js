@@ -1008,6 +1008,36 @@ describe('LabelService.generateLabel — managed labels are only bought when the
     expect(billing.reportLabelUsage).toHaveBeenCalledWith(expect.anything(), { returnId: 'ret_lbl_1', quantity: 1 });
   });
 
+  it('asks Shopify again when the plan check itself fails, so a blip does not become "Label failed"', async () => {
+    const buy = jest.fn().mockResolvedValue({ trackingCode: 'SHP-RETRY', labelUrl: null, cost: 2.71, simulated: false });
+    jest.doMock('../../app/services/carriers/ShippoAdapter', liveShippo(buy));
+    billing.managedLabelBilling
+      .mockResolvedValueOnce({ allowed: false, devStore: false, reason: 'billing_check_failed', plan: null })
+      .mockResolvedValueOnce({ allowed: true, devStore: false, reason: null, plan: 'Preview' });
+    primeReturn({ shop: managedShop() });
+    load();
+
+    const label = await LabelService.generateLabel('ret_lbl_1');
+
+    expect(billing.managedLabelBilling).toHaveBeenCalledTimes(2);
+    expect(buy).toHaveBeenCalledTimes(1);
+    expect(label.trackingCode).toBe('SHP-RETRY');
+  });
+
+  it('gives up after three failed plan checks, buying nothing', async () => {
+    const buy = jest.fn();
+    jest.doMock('../../app/services/carriers/ShippoAdapter', liveShippo(buy));
+    billing.managedLabelBilling.mockResolvedValue({ allowed: false, devStore: false, reason: 'billing_check_failed', plan: null });
+    billing.labelBillingMessage = (reason) => `try again (${reason})`;
+    primeReturn({ shop: managedShop() });
+    load();
+
+    await expect(LabelService.generateLabel('ret_lbl_1')).rejects.toMatchObject({ code: 'MANAGED_LABEL_BILLING', reason: 'billing_check_failed' });
+
+    expect(billing.managedLabelBilling).toHaveBeenCalledTimes(3);
+    expect(buy).not.toHaveBeenCalled();
+  });
+
   it('refuses to make a label at all when the shop has no carrier set up (no simulated label for a real customer)', async () => {
     primeReturn({ shop: shopWith([]) });
     load();

@@ -60,6 +60,17 @@ const RESOLUTION_LABELS = {
   KEEP_ITEM: 'Keep item (no return needed)',
 };
 
+// True while the label job started by an approval is still running: no
+// label row yet, approved within the last few minutes, no failure since.
+function labelJobStarting(ret) {
+  if (!ret || ret.label || ret.status !== 'APPROVED') return false;
+  const lastApproval = (ret.events || []).find((e) => e.type === 'return.approved' && !e.data?.withoutLabel);
+  if (!lastApproval) return false;
+  const ageMin = (Date.now() - new Date(lastApproval.createdAt).getTime()) / 60000;
+  const failedSince = (ret.events || []).some((e) => e.type === 'label.failed' && new Date(e.createdAt) >= new Date(lastApproval.createdAt));
+  return ageMin < 3 && !failedSince;
+}
+
 export default function ReturnDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -68,6 +79,7 @@ export default function ReturnDetailPage() {
   const [actionLoading, setActionLoading] = useState('');
   const [rejectModalOpen, setRejectModalOpen] = useState(false);
   const [noLabelModalOpen, setNoLabelModalOpen] = useState(false);
+  const [noLabelReason, setNoLabelReason] = useState('source'); // 'source' | 'address'
   const [rejectReason, setRejectReason] = useState('');
   const [banner, setBanner] = useState(null);
 
@@ -79,6 +91,15 @@ export default function ReturnDetailPage() {
   useEffect(() => {
     loadReturn();
   }, [loadReturn]);
+
+  // While the label job runs, refresh every few seconds so the label (or its
+  // failure) shows up without a manual reload.
+  useEffect(() => {
+    if (!labelJobStarting(ret)) return undefined;
+    const t = setTimeout(fetchReturn, 3000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ret]);
 
   async function fetchReturn() {
     try {
@@ -108,8 +129,10 @@ export default function ReturnDetailPage() {
       // Each refusal comes with the way to fix it.
       if (err.code === 'RETURNS_ADDRESS_MISSING' || /returns address/i.test(err.message || '')) {
         setBanner({ title: err.message, tone: 'warning', action: { content: 'Set returns address', onAction: () => navigate('/settings') } });
-      } else if (err.code === 'LABEL_SOURCE_MISSING') {
-        // No carrier: let the merchant pick between setting one up and approving without a label.
+      } else if (err.code === 'LABEL_SOURCE_MISSING' || err.code === 'ORDER_ADDRESS_MISSING') {
+        // No carrier, or an order with nowhere to collect from: let the merchant
+        // pick between fixing it and approving without a label.
+        setNoLabelReason(err.code === 'ORDER_ADDRESS_MISSING' ? 'address' : 'source');
         setNoLabelModalOpen(true);
       } else if (err.code === 'LABEL_BILLING') {
         setBanner({
@@ -226,7 +249,11 @@ export default function ReturnDetailPage() {
   // never buys twice. Only a label from the last few minutes is left alone.
   const labelStatus = ret.label?.status;
   const labelAgeMin = ret.label?.createdAt ? (Date.now() - new Date(ret.label.createdAt).getTime()) / 60000 : Infinity;
-  const labelInProgress = ['pending', 'buying'].includes(labelStatus) && labelAgeMin < 10;
+  // The label job starts the moment a return is approved and takes a few
+  // seconds before its row exists. Until then (or until it reports failure)
+  // treat the label as in progress: offering "Generate label" now would only
+  // collide with the running job.
+  const labelInProgress = (['pending', 'buying'].includes(labelStatus) && labelAgeMin < 10) || labelJobStarting(ret);
   // Approved "without a label": the customer posts it themselves, so no label is expected.
   const approvedWithoutLabel = !ret.label && (ret.events || []).some((e) => e.type === 'return.approved' && e.data?.withoutLabel);
   const needsLabel = ['APPROVED', 'LABEL_SENT'].includes(ret.status) && labelStatus !== 'created' && !labelInProgress && !approvedWithoutLabel;
@@ -442,7 +469,9 @@ export default function ReturnDetailPage() {
                         <Text variant="bodySm">{event.type.replace('.', ' — ')}</Text>
                       </InlineStack>
                       {event.data?.error && (
-                        <Text variant="bodySm" tone="critical">{event.data.error}</Text>
+                        // A postage-charge hiccup is retried automatically and
+                        // never affects the label itself: not an alarm.
+                        <Text variant="bodySm" tone={event.type.startsWith('label.charge') ? 'subdued' : 'critical'}>{event.data.error}</Text>
                       )}
                       {event.type === 'tracking.updated' && (
                         <Text variant="bodySm" tone="subdued">
@@ -464,24 +493,36 @@ export default function ReturnDetailPage() {
       <Modal
         open={noLabelModalOpen}
         onClose={() => setNoLabelModalOpen(false)}
-        title="No return label set up yet"
-        primaryAction={{ content: 'Turn on managed labels', onAction: () => { setNoLabelModalOpen(false); navigate('/'); } }}
-        secondaryActions={[
-          { content: 'Approve without a label', onAction: () => handleApprove({ withoutLabel: true }), loading: actionLoading === 'approve' },
-          { content: 'Cancel', onAction: () => setNoLabelModalOpen(false) },
-        ]}
+        title={noLabelReason === 'address' ? 'This order has no shipping address' : 'No return label set up yet'}
+        primaryAction={noLabelReason === 'address'
+          ? { content: 'Approve without a label', onAction: () => handleApprove({ withoutLabel: true }), loading: actionLoading === 'approve' }
+          : { content: 'Turn on managed labels', onAction: () => { setNoLabelModalOpen(false); navigate('/'); } }}
+        secondaryActions={noLabelReason === 'address'
+          ? [{ content: 'Cancel', onAction: () => setNoLabelModalOpen(false) }]
+          : [
+            { content: 'Approve without a label', onAction: () => handleApprove({ withoutLabel: true }), loading: actionLoading === 'approve' },
+            { content: 'Cancel', onAction: () => setNoLabelModalOpen(false) },
+          ]}
       >
         <Modal.Section>
-          <BlockStack gap="300">
-            <Text as="p">
-              Approving normally emails the customer a prepaid return label. This store has no label source yet.
-            </Text>
-            <List>
-              <List.Item><strong>Turn on managed labels</strong> (Dashboard): real Evri labels, billed per label on your Shopify invoice at the price shown on your plan.</List.Item>
-              <List.Item><strong>Connect your own carrier</strong> (Settings): labels at your own account's rates.</List.Item>
-              <List.Item><strong>Approve without a label</strong>: the customer is emailed your returns address and posts the item back at their own cost.</List.Item>
-            </List>
-          </BlockStack>
+          {noLabelReason === 'address' ? (
+            <BlockStack gap="300">
+              <Text as="p">
+                A return label is a parcel booking from the customer's address, and this order has none. Add a shipping address to the order in Shopify and approve again, or approve without a label: the customer is emailed your returns address and posts the item back at their own cost.
+              </Text>
+            </BlockStack>
+          ) : (
+            <BlockStack gap="300">
+              <Text as="p">
+                Approving normally emails the customer a prepaid return label. This store has no label source yet.
+              </Text>
+              <List>
+                <List.Item><strong>Turn on managed labels</strong> (Dashboard): real Evri labels, billed per label on your Shopify invoice at the price shown on your plan.</List.Item>
+                <List.Item><strong>Connect your own carrier</strong> (Settings): labels at your own account's rates.</List.Item>
+                <List.Item><strong>Approve without a label</strong>: the customer is emailed your returns address and posts the item back at their own cost.</List.Item>
+              </List>
+            </BlockStack>
+          )}
         </Modal.Section>
       </Modal>
 

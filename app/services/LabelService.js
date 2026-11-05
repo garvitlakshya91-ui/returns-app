@@ -23,6 +23,12 @@ const NO_LABEL_SOURCE_APPROVAL_MESSAGE = 'Returns need a way to get a label befo
 const LABEL_NO_RETURNS_ADDRESS_MESSAGE = 'No label was bought: add your returns address in Settings '
   + '(Warehouse address), or set your store address in Shopify.';
 const LABEL_NO_CUSTOMER_ADDRESS_MESSAGE = 'No label was bought: this order has no shipping address to collect the return from.';
+// Approval-time wording for the same gap (nothing has been attempted yet).
+const ORDER_ADDRESS_APPROVAL_MESSAGE = 'This order has no shipping address, so a return label cannot be booked for it. Add one to the order in Shopify, or approve without a label.';
+// How many times a label job re-asks Shopify about the plan when the
+// question itself fails, and the pause between asks.
+const BILLING_RECHECK_ATTEMPTS = 3;
+const BILLING_RECHECK_DELAY_MS = process.env.NODE_ENV === 'test' ? 5 : 1500;
 // Shopify variant weights come in several units; labels are booked in kg.
 const KG_PER_UNIT = { KILOGRAMS: 1, GRAMS: 0.001, POUNDS: 0.45359237, OUNCES: 0.028349523 };
 function toKg(weight) {
@@ -141,7 +147,14 @@ class LabelService {
     // cost nothing and skip the check.
     if (isManagedPlatform && adapter._isLive === true) {
       const BillingService = require('./BillingService');
-      billing.managedBilling = await BillingService.managedLabelBilling(shop);
+      // The approval already passed this check seconds ago, so a failure
+      // here is almost always a blip (token refresh, Shopify 5xx). Ask again
+      // before giving up: failing turns a fine approval into "Label failed".
+      for (let attempt = 1; ; attempt += 1) {
+        billing.managedBilling = await BillingService.managedLabelBilling(shop);
+        if (billing.managedBilling.reason !== 'billing_check_failed' || attempt >= BILLING_RECHECK_ATTEMPTS) break;
+        await new Promise((r) => setTimeout(r, BILLING_RECHECK_DELAY_MS));
+      }
       if (!billing.managedBilling.allowed) {
         const err = new Error(managedLabelBlockedMessage(billing.managedBilling.reason));
         err.code = 'MANAGED_LABEL_BILLING';
@@ -506,6 +519,22 @@ class LabelService {
    * before a return is approved, so no return is approved that can never
    * get a label.
    */
+  /**
+   * Can a label be booked from this order's customer? False only when the
+   * order definitely has no shipping address. A Shopify hiccup answers true:
+   * approval must not be blocked by a question that the label job asks
+   * again anyway.
+   */
+  static async orderHasShippingAddress(shop, returnRecord) {
+    try {
+      const { missing } = await LabelService.resolveAddresses(shop, returnRecord);
+      return !missing.sender;
+    } catch (err) {
+      logger.warn({ returnId: returnRecord?.id, err: err.message }, 'Could not check the order address before approval');
+      return true;
+    }
+  }
+
   static async hasReturnsAddress(shop) {
     const settings = shop.settings || {};
     if (settings.warehouseLine1 && settings.warehousePostcode) return true;
@@ -730,6 +759,7 @@ class LabelService {
 }
 
 LabelService.RETURNS_ADDRESS_REQUIRED_MESSAGE = RETURNS_ADDRESS_REQUIRED_MESSAGE;
+LabelService.ORDER_ADDRESS_APPROVAL_MESSAGE = ORDER_ADDRESS_APPROVAL_MESSAGE;
 LabelService.NO_LABEL_SOURCE_MESSAGE = NO_LABEL_SOURCE_MESSAGE;
 LabelService.NO_LABEL_SOURCE_APPROVAL_MESSAGE = NO_LABEL_SOURCE_APPROVAL_MESSAGE;
 

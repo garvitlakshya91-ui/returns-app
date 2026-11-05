@@ -101,6 +101,8 @@ export const analyticsApi = {
 
 export const billingApi = {
   plans: () => apiFetch('/billing/plans'),
+  // Whether managed labels can be bought right now ({ allowed, reason, message, planUrl }).
+  labels: () => apiFetch('/billing/labels'),
   subscribe: (plan, interval) => apiFetch('/billing/subscribe', {
     method: 'POST',
     body: JSON.stringify({ plan, interval }),

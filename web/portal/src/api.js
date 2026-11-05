@@ -1,3 +1,5 @@
+import { photoFileType } from './photoTypes';
+
 const API_BASE = '/api/portal';
 
 async function apiFetch(path, options = {}) {
@@ -45,7 +47,13 @@ export function quoteReturn(shopId, items) {
 
 export function uploadPhotos(returnId, files, email, itemId) {
   const formData = new FormData();
-  files.forEach((file) => formData.append('photos', file));
+  files.forEach((file) => {
+    // Some browsers hand over HEIC files with an empty type; the server
+    // checks the type, so send the one inferred from the filename.
+    const type = file.type || photoFileType(file);
+    const typed = !file.type && type ? new File([file], file.name, { type }) : file;
+    formData.append('photos', typed);
+  });
   formData.append('email', email || '');
   if (itemId) formData.append('itemId', itemId);
   return fetch(`${API_BASE}/returns/${returnId}/photos`, {

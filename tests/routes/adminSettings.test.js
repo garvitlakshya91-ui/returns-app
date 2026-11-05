@@ -57,19 +57,22 @@ describe('GET /api/admin/settings', () => {
       ...selectedShop,
       portalUrl: 'https://portal.test.local/portal/test-shop',
       shopHandle: 'test-shop',
-      themeEditorUrl: '', // no THEME_EXTENSION_UUID configured → manual steps in the UI
+      // Shopify's documented deep link: addAppBlockId={api_key}/{block handle}
+      // (SHOPIFY_API_KEY is 'test_api_key' in tests/setupEnv.js).
+      themeEditorUrl: 'https://admin.shopify.com/store/test-shop/themes/current/editor?addAppBlockId=test_api_key/start-return&target=newAppsSection',
       features: { exchanges: false }, // off unless EXCHANGES_ENABLED=true
     });
   });
 
-  it('deep-links the theme editor with the Start-a-return block once the extension id is configured', async () => {
-    process.env.THEME_EXTENSION_UUID = 'ext-uuid-123';
+  it('leaves the theme-editor deep link empty (manual steps in the UI) when no api key is configured', async () => {
+    const saved = process.env.SHOPIFY_API_KEY;
+    delete process.env.SHOPIFY_API_KEY;
     prisma.shop.findUnique.mockResolvedValue(selectedShop);
     try {
       const res = await request(app).get('/api/admin/settings');
-      expect(res.body.themeEditorUrl).toBe('https://admin.shopify.com/store/test-shop/themes/current/editor?template=index&addAppBlockId=ext-uuid-123/start-return&target=newAppsSection');
+      expect(res.body.themeEditorUrl).toBe('');
     } finally {
-      delete process.env.THEME_EXTENSION_UUID;
+      process.env.SHOPIFY_API_KEY = saved;
     }
   });
 

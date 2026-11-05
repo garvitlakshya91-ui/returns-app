@@ -14,12 +14,21 @@ const MAX_PAGES = 20;
 // Labels older than this are left to the merchant (Retry / Finish label on
 // the return page) so the sweep stays bounded by recent work.
 const LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
+// Backoff after a failed attempt: 30 min, 1 h, 2 h ... capped at a day. A
+// label that keeps failing is retried less and less often, which keeps it
+// from taking an attempt away from one that has never been tried.
+const BACKOFF_BASE_MS = 30 * 60 * 1000;
+const BACKOFF_MAX_MS = 24 * 60 * 60 * 1000;
 // Returns whose label is still worth finishing.
 const OPEN_RETURN_STATUSES = ['APPROVED', 'LABEL_SENT'];
 
 // One run at a time per process: a slow run must not overlap the next tick.
 let running = false;
 let started = false;
+
+function backoffMs(attemptsSoFar) {
+  return Math.min(BACKOFF_BASE_MS * 2 ** attemptsSoFar, BACKOFF_MAX_MS);
+}
 
 /**
  * Labels the merchant should never have to notice: a purchase that crashed
@@ -29,8 +38,10 @@ let started = false;
  * this job just finds them and calls it.
  *
  * Only labels on still-open returns are selected (in the query, so closed
- * returns can never crowd out eligible ones), and the set is walked page by
- * page by id, so a label that keeps failing never blocks the ones after it.
+ * returns can never crowd out eligible ones). Each label carries its own
+ * retry schedule in the row: never-tried labels go first, then the ones
+ * whose backoff has expired, oldest due first. A label that fails is pushed
+ * back with a growing delay, so the same failures cannot fill every run.
  */
 async function recoverUnfinishedLabels({ now = new Date() } = {}) {
   if (running) {
@@ -39,18 +50,19 @@ async function recoverUnfinishedLabels({ now = new Date() } = {}) {
   }
   running = true;
   try {
-    // Newest first, and nothing older than the lookback: a label that has
-    // stayed stuck for weeks is the merchant's to retry from the return page
-    // (it stays visible there), so permanent failures cannot pile up in
-    // front of fresh ones and starve them.
     const where = {
       OR: [
         { status: 'saved', createdAt: { lt: new Date(now.getTime() - SAVED_MIN_AGE_MS) } },
         { status: 'buying', createdAt: { lt: new Date(now.getTime() - BUYING_MIN_AGE_MS) } },
       ],
       createdAt: { gt: new Date(now.getTime() - LOOKBACK_MS) },
+      // Only labels whose backoff (if any) has run out.
+      AND: [{ OR: [{ nextRecoveryAt: null }, { nextRecoveryAt: { lte: now } }] }],
       return: { status: { in: OPEN_RETURN_STATUSES } },
     };
+    // Never tried first (null sorts first), then longest-overdue; id breaks ties
+    // so the cursor walk is stable.
+    const orderBy = [{ nextRecoveryAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'asc' }, { id: 'asc' }];
 
     const LabelService = require('../services/LabelService');
     const summary = { due: 0, finished: 0, stillOpen: 0, failed: 0 };
@@ -58,21 +70,24 @@ async function recoverUnfinishedLabels({ now = new Date() } = {}) {
     for (let page = 0; page < MAX_PAGES; page++) {
       const labels = await prisma.returnLabel.findMany({
         where,
-        select: { id: true, returnId: true, status: true },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: { id: true, returnId: true, status: true, recoveryAttempts: true },
+        orderBy,
         take: BATCH,
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       });
       if (labels.length === 0) break;
       summary.due += labels.length;
       for (const label of labels) {
+        let done = false;
         try {
           const result = await LabelService.generateLabel(label.returnId);
-          if (result?.status === 'created') summary.finished += 1; else summary.stillOpen += 1;
+          done = result?.status === 'created';
+          if (done) summary.finished += 1; else summary.stillOpen += 1;
         } catch (err) {
           summary.failed += 1;
           logger.warn({ returnId: label.returnId, labelId: label.id, status: label.status, err: err.message }, 'Unfinished label could not be recovered yet');
         }
+        if (!done) await scheduleRetry(label, now);
       }
       if (labels.length < BATCH) break;
       cursor = labels[labels.length - 1].id;
@@ -82,6 +97,19 @@ async function recoverUnfinishedLabels({ now = new Date() } = {}) {
     return summary;
   } finally {
     running = false;
+  }
+}
+
+/** Push a label that did not finish back by its backoff; never throws. */
+async function scheduleRetry(label, now) {
+  const attempts = Number(label.recoveryAttempts) || 0;
+  try {
+    await prisma.returnLabel.update({
+      where: { id: label.id },
+      data: { recoveryAttempts: attempts + 1, nextRecoveryAt: new Date(now.getTime() + backoffMs(attempts)) },
+    });
+  } catch (err) {
+    logger.warn({ labelId: label.id, err: err.message }, 'Could not schedule the next recovery attempt');
   }
 }
 
@@ -95,4 +123,7 @@ function startLabelRecovery() {
   return true;
 }
 
-module.exports = { recoverUnfinishedLabels, startLabelRecovery, SAVED_MIN_AGE_MS, BUYING_MIN_AGE_MS, LOOKBACK_MS, BATCH, OPEN_RETURN_STATUSES };
+module.exports = {
+  recoverUnfinishedLabels, startLabelRecovery, backoffMs,
+  SAVED_MIN_AGE_MS, BUYING_MIN_AGE_MS, LOOKBACK_MS, BACKOFF_BASE_MS, BACKOFF_MAX_MS, BATCH, OPEN_RETURN_STATUSES,
+};

@@ -37,14 +37,56 @@ describe('recoverUnfinishedLabels — what it selects', () => {
       ],
       // Nothing older than the lookback: a label stuck for weeks is the merchant's to retry.
       createdAt: { gt: new Date('2026-10-04T10:00:00Z') },
+      // Only labels whose backoff has run out (or that were never tried).
+      AND: [{ OR: [{ nextRecoveryAt: null }, { nextRecoveryAt: { lte: now } }] }],
       // Closed returns are excluded IN THE QUERY, so they can never crowd out eligible labels.
       return: { status: { in: ['APPROVED', 'LABEL_SENT'] } },
     });
     expect(job.LOOKBACK_MS).toBe(14 * 24 * 60 * 60 * 1000);
-    // Newest first, so permanent failures can never starve fresh labels.
-    expect(arg.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
+    // Never-tried labels first, then the longest overdue: a label that keeps
+    // failing is pushed back, so it cannot starve one that was never attempted.
+    expect(arg.orderBy).toEqual([{ nextRecoveryAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'asc' }, { id: 'asc' }]);
+    expect(arg.select).toEqual({ id: true, returnId: true, status: true, recoveryAttempts: true });
     expect(arg.take).toBe(50);
     expect(arg.cursor).toBeUndefined();
+  });
+
+  it('a label that does not finish is pushed back with a growing delay (30 min, 1 h, 2 h … 24 h), stored on the row', async () => {
+    const now = new Date('2026-10-18T10:00:00Z');
+    prisma.returnLabel.findMany.mockResolvedValue([
+      { ...row('fresh'), recoveryAttempts: 0 },
+      { ...row('third'), recoveryAttempts: 2 },
+      { ...row('old', 'buying'), recoveryAttempts: 9 },
+      { ...row('ok'), recoveryAttempts: 4 },
+    ]);
+    labelService.generateLabel
+      .mockRejectedValueOnce(new Error('carrier cannot confirm'))
+      .mockResolvedValueOnce({ status: 'saved' }) // email still failing counts as not finished
+      .mockRejectedValueOnce(new Error('still stuck'))
+      .mockResolvedValueOnce({ status: 'created' });
+
+    await job.recoverUnfinishedLabels({ now });
+
+    expect(prisma.returnLabel.update.mock.calls.map((c) => c[0])).toEqual([
+      { where: { id: 'fresh' }, data: { recoveryAttempts: 1, nextRecoveryAt: new Date('2026-10-18T10:30:00Z') } },
+      { where: { id: 'third' }, data: { recoveryAttempts: 3, nextRecoveryAt: new Date('2026-10-18T12:00:00Z') } },
+      { where: { id: 'old' }, data: { recoveryAttempts: 10, nextRecoveryAt: new Date('2026-10-19T10:00:00Z') } }, // capped at a day
+    ]);
+    expect(job.backoffMs(0)).toBe(30 * 60 * 1000);
+    expect(job.backoffMs(1)).toBe(60 * 60 * 1000);
+    expect(job.backoffMs(5)).toBe(16 * 60 * 60 * 1000);
+    expect(job.backoffMs(6)).toBe(24 * 60 * 60 * 1000);
+  });
+
+  it('a failure to record the backoff is logged and does not stop the run', async () => {
+    prisma.returnLabel.findMany.mockResolvedValue([row('a'), row('b')]);
+    labelService.generateLabel.mockRejectedValue(new Error('nope'));
+    prisma.returnLabel.update.mockRejectedValue(new Error('db write failed'));
+
+    const result = await job.recoverUnfinishedLabels();
+
+    expect(result).toEqual({ due: 2, finished: 0, stillOpen: 0, failed: 2 });
+    expect(logger.warn).toHaveBeenCalledWith(expect.objectContaining({ labelId: 'a', err: 'db write failed' }), 'Could not schedule the next recovery attempt');
   });
 
   it('walks every page by cursor, so labels that keep failing never block the ones after them', async () => {

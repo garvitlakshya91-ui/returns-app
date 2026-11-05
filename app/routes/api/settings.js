@@ -22,12 +22,14 @@ router.get('/', async (req, res) => {
   const portalUrl = base && slug ? `${base}/portal/${slug}` : '';
 
   // Deep link into the theme editor with our "Start a return" app block
-  // ready to place (App Store requirement 5.1.3). The block's extension id
-  // is assigned by Shopify on `shopify app deploy`; until it is configured
-  // the dashboard shows manual steps instead.
-  const extensionId = process.env.THEME_EXTENSION_UUID || '';
-  const themeEditorUrl = extensionId && slug
-    ? `https://admin.shopify.com/store/${slug}/themes/current/editor?template=index&addAppBlockId=${extensionId}/start-return&target=newAppsSection`
+  // ready to place (App Store requirement 5.1.3). Shopify's documented
+  // form is addAppBlockId={api_key}/{block handle}: the app's client id,
+  // not the extension uuid (that older form is deprecated and the editor
+  // answers it with "There is a problem with the app block"). Without a
+  // key the dashboard shows the manual steps only.
+  const apiKey = process.env.SHOPIFY_API_KEY || '';
+  const themeEditorUrl = apiKey && slug
+    ? `https://admin.shopify.com/store/${slug}/themes/current/editor?addAppBlockId=${apiKey}/start-return&target=newAppsSection`
     : '';
 
   // Which optional flows this build offers customers, so the dashboard can

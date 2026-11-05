@@ -67,9 +67,19 @@ export default function ReturnsListPage() {
     setBulkLoading(true);
     setBulkError('');
     try {
-      await returnsApi.bulk(action, selectedResources, reason);
+      const result = await returnsApi.bulk(action, selectedResources, reason);
       clearSelection();
       await loadReturns();
+      // Some returns can be skipped for a reason the merchant must act on
+      // (today: an order with no shipping address). Say so, not just a count.
+      const noAddress = Object.values(result?.reasons || {}).filter((r) => r === 'ORDER_ADDRESS_MISSING').length;
+      if (noAddress > 0) {
+        setBulkError({
+          message: `${noAddress} return${noAddress === 1 ? ' was' : 's were'} not approved: the order has no shipping address to book a label from. Open each one to approve it without a label.`,
+          code: 'ORDER_ADDRESS_MISSING',
+          planUrl: null,
+        });
+      }
     } catch (err) {
       console.error('Bulk action error:', err);
       setBulkError({ message: err.message || 'Bulk action failed', code: err.code || null, planUrl: err.planUrl || null });
@@ -83,6 +93,7 @@ export default function ReturnsListPage() {
     if (e.code === 'RETURNS_ADDRESS_MISSING' || /returns address/i.test(e.message)) return { content: 'Set returns address', onAction: () => navigate('/settings') };
     if (e.code === 'LABEL_SOURCE_MISSING') return { content: 'Turn on managed labels', onAction: () => navigate('/') };
     if (e.code === 'LABEL_BILLING' && e.planUrl) return { content: 'Choose a plan', url: e.planUrl, external: true };
+    if (e.code === 'ORDER_ADDRESS_MISSING') return { content: 'Show requested returns', onAction: () => setStatusFilter(['REQUESTED']) };
     return undefined;
   }
 

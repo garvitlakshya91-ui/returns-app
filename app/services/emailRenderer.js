@@ -67,6 +67,14 @@ async function sendEmailNow({ to, subject, template, data }) {
     return { sent: true, to, subject, id: sentData.id };
   }
 
+  // No key is fine on a laptop. In production it means a customer did not
+  // get their label: fail the job loudly instead of logging it as sent.
+  if (process.env.NODE_ENV === 'production') {
+    logger.error({ to, subject, template }, 'RESEND_API_KEY is not set: email NOT sent');
+    const err = new Error('Email is not configured on this server (RESEND_API_KEY is missing)');
+    err.code = 'EMAIL_NOT_CONFIGURED';
+    throw err;
+  }
   logger.info({ to, subject, template }, '[Email] dev mode — no RESEND_API_KEY, skipping send');
   return { sent: true, to, subject };
 }

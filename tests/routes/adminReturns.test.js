@@ -307,6 +307,27 @@ describe('POST /api/admin/returns/bulk', () => {
     expect(res.body).toEqual({ action: 'approve', success: 1, failed: ['r2'] });
   });
 
+  it('bulk approve skips an order with no shipping address, with the reason, and approves the rest', async () => {
+    prisma.return.findFirst
+      .mockResolvedValueOnce(fakeReturn({ id: 'r1', status: 'REQUESTED' }))
+      .mockResolvedValueOnce(fakeReturn({ id: 'r2', status: 'REQUESTED' }));
+    labelService.orderHasShippingAddress.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    prisma.return.update.mockImplementation(({ where }) => Promise.resolve(fakeReturn({ id: where.id, status: 'APPROVED' })));
+    const spy = jest.spyOn(eventBus, 'emit');
+
+    const res = await request(app).post('/api/admin/returns/bulk').send({ action: 'approve', ids: ['r1', 'r2'] });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ action: 'approve', success: 1, failed: ['r1'], reasons: { r1: 'ORDER_ADDRESS_MISSING' } });
+    expect(prisma.return.update).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith('return.approved', expect.objectContaining({ returnId: 'r2' }));
+    // "Without a label" needs no customer address, so the check is skipped.
+    labelService.orderHasShippingAddress.mockClear();
+    prisma.return.findFirst.mockResolvedValueOnce(fakeReturn({ id: 'r1', status: 'REQUESTED' }));
+    await request(app).post('/api/admin/returns/bulk').send({ action: 'approve', ids: ['r1'], withoutLabel: true });
+    expect(labelService.orderHasShippingAddress).not.toHaveBeenCalled();
+  });
+
   it('bulk approve skips test returns (reported as failed, never approved)', async () => {
     prisma.return.findFirst
       .mockResolvedValueOnce(fakeReturn({ id: 'r1', status: 'REQUESTED' }))
@@ -407,9 +428,29 @@ describe('PUT /api/admin/returns/:id/received — the parcel is back', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('RECEIVED');
-    expect(prisma.return.findFirst.mock.calls[0][0].where).toEqual({ id: 'r1', shopId: 'shop_test_1', status: { in: ['LABEL_SENT', 'IN_TRANSIT'] } });
-    expect(prisma.return.updateMany).toHaveBeenCalledWith({ where: { id: 'r1', status: { in: ['LABEL_SENT', 'IN_TRANSIT'] } }, data: { status: 'RECEIVED' } });
+    expect(prisma.return.findFirst.mock.calls[0][0].where).toEqual({ id: 'r1', shopId: 'shop_test_1', status: { in: ['LABEL_SENT', 'IN_TRANSIT', 'APPROVED'] } });
+    expect(prisma.return.updateMany).toHaveBeenCalledWith({ where: { id: 'r1', status: 'IN_TRANSIT' }, data: { status: 'RECEIVED' } });
     expect(spy).toHaveBeenCalledWith('return.received', { returnId: 'r1', shopId: 'shop_test_1', source: 'merchant' });
+  });
+
+  it('also accepts a return approved WITHOUT a label (the customer posts it; nothing else can mark it back)', async () => {
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'APPROVED' }));
+    prisma.returnLabel.findUnique.mockResolvedValue(null);
+    prisma.returnEvent.findFirst.mockResolvedValue({ type: 'return.approved', data: { withoutLabel: true } });
+    prisma.return.updateMany.mockResolvedValue({ count: 1 });
+    const res = await request(app).put('/api/admin/returns/r1/received');
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('RECEIVED');
+    expect(prisma.return.updateMany).toHaveBeenCalledWith({ where: { id: 'r1', status: 'APPROVED' }, data: { status: 'RECEIVED' } });
+  });
+
+  it('404 for an APPROVED return whose label is on its way (tracking will mark it)', async () => {
+    prisma.return.findFirst.mockResolvedValue(fakeReturn({ id: 'r1', status: 'APPROVED' }));
+    prisma.returnLabel.findUnique.mockResolvedValue(null);
+    prisma.returnEvent.findFirst.mockResolvedValue({ type: 'return.approved', data: { withoutLabel: false } });
+    const res = await request(app).put('/api/admin/returns/r1/received');
+    expect(res.status).toBe(404);
+    expect(prisma.return.updateMany).not.toHaveBeenCalled();
   });
 
   it('404 when no parcel is expected (not approved yet, or already received)', async () => {

@@ -35,10 +35,14 @@ describe('recoverUnfinishedLabels — what it selects', () => {
         { status: 'saved', createdAt: { lt: new Date('2026-10-18T09:55:00Z') } },
         { status: 'buying', createdAt: { lt: new Date('2026-10-18T09:50:00Z') } },
       ],
+      // Nothing older than the lookback: a label stuck for weeks is the merchant's to retry.
+      createdAt: { gt: new Date('2026-10-04T10:00:00Z') },
       // Closed returns are excluded IN THE QUERY, so they can never crowd out eligible labels.
       return: { status: { in: ['APPROVED', 'LABEL_SENT'] } },
     });
-    expect(arg.orderBy).toEqual({ id: 'asc' });
+    expect(job.LOOKBACK_MS).toBe(14 * 24 * 60 * 60 * 1000);
+    // Newest first, so permanent failures can never starve fresh labels.
+    expect(arg.orderBy).toEqual([{ createdAt: 'desc' }, { id: 'desc' }]);
     expect(arg.take).toBe(50);
     expect(arg.cursor).toBeUndefined();
   });

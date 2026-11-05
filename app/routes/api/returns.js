@@ -112,6 +112,19 @@ async function approvalBlocker(shopId, withoutLabel, returnRecord = null) {
 }
 
 /**
+ * Was this return's latest approval a "without a label" one (no label row,
+ * approval event flagged withoutLabel)? Such returns have no tracking, so the
+ * merchant is allowed to mark them received by hand.
+ */
+async function approvedWithoutLabel(returnId) {
+  const [label, approval] = await Promise.all([
+    prisma.returnLabel.findUnique({ where: { returnId } }),
+    prisma.returnEvent.findFirst({ where: { returnId, type: 'return.approved' }, orderBy: { createdAt: 'desc' } }),
+  ]);
+  return !label && Boolean(approval?.data?.withoutLabel);
+}
+
+/**
  * POST /api/admin/returns/bulk
  * Apply approve / reject / process to many returns at once. Each item is
  * handled independently — failures are reported, not fatal.
@@ -139,6 +152,13 @@ router.post('/bulk', async (req, res) => {
     const emitters = require('../../events/emitters');
     let success = 0;
     const failed = [];
+    const reasons = {}; // id → why it was skipped, when there is a merchant-facing reason
+
+    // The per-order address check (same as single approval) needs the shop.
+    let shopForLabels = null;
+    if (action === 'approve' && !withoutLabel) {
+      shopForLabels = await prisma.shop.findUnique({ where: { id: req.shopId }, include: { carrierConfigs: true } });
+    }
 
     for (const id of ids) {
       try {
@@ -146,6 +166,16 @@ router.post('/bulk', async (req, res) => {
           const r = await prisma.return.findFirst({ where: { id, shopId: req.shopId, status: 'REQUESTED' } });
           // Test returns have no real order to post a label from.
           if (!r || isTestReturn(r)) { failed.push(id); continue; }
+          // Nor can a label be booked from an order with no shipping address:
+          // skip it with the reason, rather than approving it into a failed label.
+          if (shopForLabels) {
+            const LabelService = require('../../services/LabelService');
+            if (!(await LabelService.orderHasShippingAddress(shopForLabels, r))) {
+              failed.push(id);
+              reasons[id] = 'ORDER_ADDRESS_MISSING';
+              continue;
+            }
+          }
           const updated = await prisma.return.update({ where: { id }, data: { status: 'APPROVED' } });
           eventBus.emit(emitters.RETURN_APPROVED, { returnId: updated.id, shopId: req.shopId, approvedBy: 'merchant', withoutLabel });
           success++;
@@ -170,7 +200,7 @@ router.post('/bulk', async (req, res) => {
       }
     }
 
-    res.json({ action, success, failed });
+    res.json({ action, success, failed, ...(Object.keys(reasons).length ? { reasons } : {}) });
   } catch (err) {
     console.error('Bulk action error:', err);
     res.status(500).json({ error: 'Bulk action failed' });
@@ -314,13 +344,16 @@ router.put('/:id/approve', async (req, res) => {
 router.put('/:id/received', async (req, res) => {
   try {
     const returnRecord = await prisma.return.findFirst({
-      where: { id: req.params.id, shopId: req.shopId, status: { in: ['LABEL_SENT', 'IN_TRANSIT'] } },
+      where: { id: req.params.id, shopId: req.shopId, status: { in: ['LABEL_SENT', 'IN_TRANSIT', 'APPROVED'] } },
     });
-    if (!returnRecord) {
-      return res.status(404).json({ error: 'Return not found, or its parcel is not expected (it needs a label out and not yet received)' });
+    // APPROVED only counts when the merchant approved without a label: the
+    // customer posts the parcel themselves, so nothing else can mark it back.
+    const expected = returnRecord && (returnRecord.status !== 'APPROVED' || await approvedWithoutLabel(returnRecord.id));
+    if (!expected) {
+      return res.status(404).json({ error: 'Return not found, or its parcel is not expected (it needs a label out, or to have been approved without one, and not yet received)' });
     }
     const updated = await prisma.return.updateMany({
-      where: { id: returnRecord.id, status: { in: ['LABEL_SENT', 'IN_TRANSIT'] } },
+      where: { id: returnRecord.id, status: returnRecord.status },
       data: { status: 'RECEIVED' },
     });
     if (updated.count === 0) {

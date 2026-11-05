@@ -271,6 +271,18 @@ describe('sendEmailNow', () => {
     expect(resend.send).not.toHaveBeenCalled();
   });
 
+  it('in production, a missing RESEND_API_KEY fails the send instead of pretending it went out', async () => {
+    delete process.env.RESEND_API_KEY;
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      await expect(sendEmailNow(msg)).rejects.toMatchObject({ code: 'EMAIL_NOT_CONFIGURED' });
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
+    expect(resend.send).not.toHaveBeenCalled();
+  });
+
   it('renders the template and sends through Resend with the default from-address when a key is set', async () => {
     process.env.RESEND_API_KEY = 're_test_123';
     const out = await sendEmailNow(msg);

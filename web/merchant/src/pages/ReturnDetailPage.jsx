@@ -71,6 +71,19 @@ function labelJobStarting(ret) {
   return ageMin < 3 && !failedSince;
 }
 
+// True while a label is being worked on: the job has started but not yet
+// written a row, or the row is still 'pending' / 'buying' / 'saved' (bought,
+// follow-up steps running) and recent. The page keeps refreshing until the
+// label is 'created' or a failure is logged, so the merchant never has to
+// reload to see the result.
+function labelInFlight(ret) {
+  if (labelJobStarting(ret)) return true;
+  const label = ret?.label;
+  if (!label || !['pending', 'buying', 'saved'].includes(label.status)) return false;
+  const ageMin = label.createdAt ? (Date.now() - new Date(label.createdAt).getTime()) / 60000 : Infinity;
+  return ageMin < 10;
+}
+
 export default function ReturnDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -95,7 +108,7 @@ export default function ReturnDetailPage() {
   // While the label job runs, refresh every few seconds so the label (or its
   // failure) shows up without a manual reload.
   useEffect(() => {
-    if (!labelJobStarting(ret)) return undefined;
+    if (!labelInFlight(ret)) return undefined;
     const t = setTimeout(fetchReturn, 3000);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -260,7 +273,9 @@ export default function ReturnDetailPage() {
   const labelAction = !ret.label ? 'Generate label' : labelStatus === 'saved' ? 'Finish label' : 'Retry label';
   const lastLabelFailure = (ret.events || []).find((e) => e.type === 'label.failed')?.data?.error;
   const canProcess = ['RECEIVED', 'INSPECTING', 'APPROVED', 'LABEL_SENT', 'IN_TRANSIT'].includes(ret.status);
-  const canMarkReceived = ['LABEL_SENT', 'IN_TRANSIT'].includes(ret.status);
+  // A return approved without a label has no tracking to do this for it:
+  // the merchant marks it received when the customer's parcel turns up.
+  const canMarkReceived = ['LABEL_SENT', 'IN_TRANSIT'].includes(ret.status) || (ret.status === 'APPROVED' && approvedWithoutLabel);
 
   return (
     <Page

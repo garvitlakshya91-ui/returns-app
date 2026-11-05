@@ -11,6 +11,9 @@ const BUYING_MIN_AGE_MS = 10 * 60 * 1000;
 // the next run carries on from the top since finished rows drop out).
 const BATCH = 50;
 const MAX_PAGES = 20;
+// Labels older than this are left to the merchant (Retry / Finish label on
+// the return page) so the sweep stays bounded by recent work.
+const LOOKBACK_MS = 14 * 24 * 60 * 60 * 1000;
 // Returns whose label is still worth finishing.
 const OPEN_RETURN_STATUSES = ['APPROVED', 'LABEL_SENT'];
 
@@ -36,11 +39,16 @@ async function recoverUnfinishedLabels({ now = new Date() } = {}) {
   }
   running = true;
   try {
+    // Newest first, and nothing older than the lookback: a label that has
+    // stayed stuck for weeks is the merchant's to retry from the return page
+    // (it stays visible there), so permanent failures cannot pile up in
+    // front of fresh ones and starve them.
     const where = {
       OR: [
         { status: 'saved', createdAt: { lt: new Date(now.getTime() - SAVED_MIN_AGE_MS) } },
         { status: 'buying', createdAt: { lt: new Date(now.getTime() - BUYING_MIN_AGE_MS) } },
       ],
+      createdAt: { gt: new Date(now.getTime() - LOOKBACK_MS) },
       return: { status: { in: OPEN_RETURN_STATUSES } },
     };
 
@@ -51,7 +59,7 @@ async function recoverUnfinishedLabels({ now = new Date() } = {}) {
       const labels = await prisma.returnLabel.findMany({
         where,
         select: { id: true, returnId: true, status: true },
-        orderBy: { id: 'asc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: BATCH,
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       });
@@ -87,4 +95,4 @@ function startLabelRecovery() {
   return true;
 }
 
-module.exports = { recoverUnfinishedLabels, startLabelRecovery, SAVED_MIN_AGE_MS, BUYING_MIN_AGE_MS, BATCH, OPEN_RETURN_STATUSES };
+module.exports = { recoverUnfinishedLabels, startLabelRecovery, SAVED_MIN_AGE_MS, BUYING_MIN_AGE_MS, LOOKBACK_MS, BATCH, OPEN_RETURN_STATUSES };

@@ -7,7 +7,9 @@
 {%- assign shop_slug = shop.permanent_domain | split: '.' | first -%}
 {%- assign portal_url = 'https://app.returnsflow.uk/portal/' | append: shop_slug -%}
 {%- if customer -%}
-  {%- assign portal_url = portal_url | append: '?email=' | append: customer.email | url_encode -%}
+  {%- comment -%} Encode only the email: a filter chain applies to the whole string so far. {%- endcomment -%}
+  {%- assign customer_email_param = customer.email | url_encode -%}
+  {%- assign portal_url = portal_url | append: '?email=' | append: customer_email_param -%}
 {%- endif -%}
 
 <div class="returnflow-start-return" style="text-align: {{ block.settings.alignment }}; padding: {{ block.settings.padding }}px 0;" {{ block.shopify_attributes }}>

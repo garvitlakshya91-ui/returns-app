@@ -64,8 +64,11 @@ async function recoverUnfinishedLabels({ now = new Date() } = {}) {
     // so the cursor walk is stable.
     const orderBy = [{ nextRecoveryAt: { sort: 'asc', nulls: 'first' } }, { createdAt: 'asc' }, { id: 'asc' }];
 
-    const LabelService = require('../services/LabelService');
-    const summary = { due: 0, finished: 0, stillOpen: 0, failed: 0 };
+    // Collect everything due BEFORE touching any row: processing a label
+    // changes the very fields the pages are ordered and filtered by
+    // (status, nextRecoveryAt), and a cursor walk over a set that shifts
+    // under it stops early. The walk itself is bounded by BATCH × MAX_PAGES.
+    const due = [];
     let cursor = null;
     for (let page = 0; page < MAX_PAGES; page++) {
       const labels = await prisma.returnLabel.findMany({
@@ -76,21 +79,24 @@ async function recoverUnfinishedLabels({ now = new Date() } = {}) {
         ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       });
       if (labels.length === 0) break;
-      summary.due += labels.length;
-      for (const label of labels) {
-        let done = false;
-        try {
-          const result = await LabelService.generateLabel(label.returnId);
-          done = result?.status === 'created';
-          if (done) summary.finished += 1; else summary.stillOpen += 1;
-        } catch (err) {
-          summary.failed += 1;
-          logger.warn({ returnId: label.returnId, labelId: label.id, status: label.status, err: err.message }, 'Unfinished label could not be recovered yet');
-        }
-        if (!done) await scheduleRetry(label, now);
-      }
+      due.push(...labels);
       if (labels.length < BATCH) break;
       cursor = labels[labels.length - 1].id;
+    }
+
+    const LabelService = require('../services/LabelService');
+    const summary = { due: due.length, finished: 0, stillOpen: 0, failed: 0 };
+    for (const label of due) {
+      let done = false;
+      try {
+        const result = await LabelService.generateLabel(label.returnId);
+        done = result?.status === 'created';
+        if (done) summary.finished += 1; else summary.stillOpen += 1;
+      } catch (err) {
+        summary.failed += 1;
+        logger.warn({ returnId: label.returnId, labelId: label.id, status: label.status, err: err.message }, 'Unfinished label could not be recovered yet');
+      }
+      if (!done) await scheduleRetry(label, now);
     }
 
     if (summary.due > 0) logger.info(summary, 'Unfinished label recovery done');

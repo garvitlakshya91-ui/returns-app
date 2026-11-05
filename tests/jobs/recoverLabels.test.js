@@ -103,6 +103,32 @@ describe('recoverUnfinishedLabels — what it selects', () => {
     expect(labelService.generateLabel).toHaveBeenCalledTimes(52);
     expect(labelService.generateLabel).toHaveBeenCalledWith('ret_b01');
     expect(result).toEqual({ due: 52, finished: 1, stillOpen: 0, failed: 51 });
+
+    // Every page is fetched BEFORE any label is processed or rescheduled:
+    // processing changes status / nextRecoveryAt, the fields the pages are
+    // ordered and filtered by, and a cursor walk over a shifting set would
+    // stop after the first page while more labels were eligible.
+    const lastFetch = Math.max(...prisma.returnLabel.findMany.mock.invocationCallOrder);
+    const firstAttempt = Math.min(...labelService.generateLabel.mock.invocationCallOrder);
+    const firstReschedule = Math.min(...prisma.returnLabel.update.mock.invocationCallOrder);
+    expect(lastFetch).toBeLessThan(firstAttempt);
+    expect(lastFetch).toBeLessThan(firstReschedule);
+    expect(prisma.returnLabel.update).toHaveBeenCalledTimes(51);
+  });
+
+  it('a third page is fetched too when the second is full (the walk continues until a short page or MAX_PAGES)', async () => {
+    const full = (prefix) => Array.from({ length: 50 }, (_, i) => row(`${prefix}${String(i).padStart(2, '0')}`));
+    prisma.returnLabel.findMany
+      .mockResolvedValueOnce(full('a'))
+      .mockResolvedValueOnce(full('b'))
+      .mockResolvedValueOnce([row('c00')]);
+
+    const result = await job.recoverUnfinishedLabels();
+
+    expect(prisma.returnLabel.findMany).toHaveBeenCalledTimes(3);
+    expect(prisma.returnLabel.findMany.mock.calls[2][0]).toMatchObject({ cursor: { id: 'b49' }, skip: 1 });
+    expect(result.due).toBe(101);
+    expect(labelService.generateLabel).toHaveBeenCalledTimes(101);
   });
 
   it('stops when a page comes back short, and is quiet when there is nothing to do', async () => {

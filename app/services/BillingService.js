@@ -10,7 +10,9 @@ const logger = require('../utils/logger');
 // than Growth for nothing. The PRO enum + PLAN_LIMITS stay in place so it can
 // be re-introduced the moment those features ship.
 const PLANS = {
-  FREE:    { amount: 0,  name: 'Free',    returnsPerMonth: 30 },
+  // Shopify App Pricing invoices the free plan under its (unchangeable) plan
+  // name "Preview", so that is what app_subscriptions/update webhooks carry.
+  FREE:    { amount: 0,  name: 'Free',    returnsPerMonth: 30, aliases: ['preview'] },
   STARTER: { amount: 9,  name: 'Starter', returnsPerMonth: 150 },
   GROWTH:  { amount: 29, name: 'Growth',  returnsPerMonth: null },
 };
@@ -60,8 +62,9 @@ function planKeyFromName(name) {
     .replace(/\s*\(annual\)\s*$/i, '')
     .trim()
     .toLowerCase();
-  const entry = Object.entries(PLANS).find(([, p]) => p.name.toLowerCase() === cleaned)
-    || Object.entries(PLANS).find(([, p]) => new RegExp(`^${p.name}([^a-z]|$)`, 'i').test(cleaned));
+  const names = (p) => [p.name, ...(p.aliases || [])];
+  const entry = Object.entries(PLANS).find(([, p]) => names(p).some((n) => n.toLowerCase() === cleaned))
+    || Object.entries(PLANS).find(([, p]) => names(p).some((n) => new RegExp(`^${n}([^a-z]|$)`, 'i').test(cleaned)));
   return entry ? entry[0] : null;
 }
 

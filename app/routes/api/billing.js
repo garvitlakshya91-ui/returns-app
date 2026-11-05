@@ -25,7 +25,7 @@ router.get('/plans', (req, res) => {
   res.json({
     currentPlan: req.shop.plan,
     trialDays: BillingService.TRIAL_DAYS,
-    plans: Object.entries(PLANS).map(([key, p]) => ({
+    plans: Object.entries(PLANS).map(([key, { aliases, ...p }]) => ({
       id: key,
       ...p,
       annualAmount: BillingService.annualAmount(key),

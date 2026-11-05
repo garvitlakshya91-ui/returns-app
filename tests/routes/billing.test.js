@@ -256,6 +256,10 @@ describe('BillingService.planKeyFromName', () => {
     // Managed-pricing plan names may carry trailing text after the plan word.
     expect(BillingService.planKeyFromName('Starter — £9/month')).toBe('STARTER');
     expect(BillingService.planKeyFromName('Growth ($29/mo)')).toBe('GROWTH');
+    // The App Pricing free plan is invoiced as "Preview" (its fixed plan name),
+    // so a downgrade webhook must land on FREE rather than keep the old plan.
+    expect(BillingService.planKeyFromName('Preview')).toBe('FREE');
+    expect(BillingService.planKeyFromName('ReturnFlow Preview')).toBe('FREE');
     expect(BillingService.planKeyFromName('Unknown thing')).toBeNull();
     expect(BillingService.planKeyFromName(null)).toBeNull();
   });

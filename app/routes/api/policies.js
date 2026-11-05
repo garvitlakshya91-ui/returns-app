@@ -2,9 +2,29 @@ const { Router } = require('express');
 const { verifyShopifySession } = require('../../middleware/auth');
 const prisma = require('../../config/database');
 const logger = require('../../utils/logger');
+const { EXCHANGES_ENABLED } = require('../../config/features');
 
 const router = Router();
 router.use(verifyShopifySession);
+
+// A policy must leave the customer at least one way to resolve a return,
+// or every item it covers is a dead end in the portal. Mirrors
+// ReturnValidation.allowedResolutions: refund and store credit are on unless
+// switched off, exchange only when switched on AND available in this build.
+function resolutionsError(resolutions) {
+  if (resolutions === undefined) return null;
+  if (!resolutions || typeof resolutions !== 'object' || Array.isArray(resolutions)) {
+    return 'resolutions must be an object';
+  }
+  const r = resolutions;
+  const refundOrCredit = r.allowRefund !== false || r.allowStoreCredit !== false;
+  if (refundOrCredit) return null;
+  if (r.allowExchange === true && !EXCHANGES_ENABLED) {
+    return 'Exchanges are not available yet, so this policy would give customers no way to return. Allow refunds or store credit as well.';
+  }
+  if (r.allowExchange === true) return null;
+  return 'Allow at least one resolution (refund, store credit or exchange), or customers covered by this policy cannot return anything.';
+}
 
 // Only these fields may be set from the dashboard. shopId / id are never
 // client-controlled — accepting them would let a merchant re-home a policy
@@ -42,6 +62,8 @@ router.post('/', async (req, res) => {
     if (!data.name || !String(data.name).trim()) {
       return res.status(400).json({ error: 'name is required' });
     }
+    const resolutionsProblem = resolutionsError(data.resolutions);
+    if (resolutionsProblem) return res.status(400).json({ error: resolutionsProblem });
 
     // There can only be one default policy per shop.
     if (data.isDefault) {
@@ -76,6 +98,8 @@ router.put('/:id', async (req, res) => {
     if (data.name !== undefined && !String(data.name).trim()) {
       return res.status(400).json({ error: 'name cannot be empty' });
     }
+    const resolutionsProblem = resolutionsError(data.resolutions);
+    if (resolutionsProblem) return res.status(400).json({ error: resolutionsProblem });
 
     if (data.isDefault) {
       await prisma.returnPolicy.updateMany({

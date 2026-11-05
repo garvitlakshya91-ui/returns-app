@@ -38,6 +38,7 @@ function installServiceMocks() {
     sendRefundProcessed: jest.fn().mockResolvedValue({ id: 'msg_refund' }),
     sendReturnRejected: jest.fn().mockResolvedValue({ id: 'msg_rejected' }),
     sendReturnReceived: jest.fn().mockResolvedValue({ id: 'msg_received' }),
+    sendNewReturnAlert: jest.fn().mockResolvedValue({ id: 'msg_merchant' }),
   };
   jest.doMock('../../app/services/NotificationService', () => notification);
 
@@ -98,6 +99,40 @@ describe('onReturnCreated', () => {
     expect(notification.sendReturnConfirmation).toHaveBeenCalledTimes(1);
     expect(notification.sendReturnConfirmation).toHaveBeenCalledWith(record);
     expect(unhandled).toHaveLength(0);
+  });
+
+  it('tells the merchant too: loads the shop (email, settings) and sends the new-return alert', async () => {
+    const record = fakeReturn({ id: 'ret_c1', items: [{ id: 'i1' }] });
+    const shop = { email: 'owner@shop.com', name: 'Test Shop', settings: { merchantNotify: 'email' }, shopifyDomain: 'test-shop.myshopify.com', currency: 'GBP' };
+    prisma.return.findUnique.mockResolvedValue(record);
+    prisma.shop.findUnique.mockResolvedValue(shop);
+    prisma.returnEvent.create.mockResolvedValue({});
+    loadHandler('onReturnCreated');
+
+    eventBus.emit(RETURN_CREATED, { returnId: 'ret_c1', shopId: 'shop_test_1' });
+    await flush();
+
+    expect(prisma.shop.findUnique).toHaveBeenCalledWith({
+      where: { id: 'shop_test_1' },
+      select: { email: true, name: true, settings: true, shopifyDomain: true, currency: true },
+    });
+    expect(notification.sendNewReturnAlert).toHaveBeenCalledWith(shop, record);
+    expect(unhandled).toHaveLength(0);
+  });
+
+  it('a failing merchant alert never breaks the customer confirmation (already sent) or throws', async () => {
+    prisma.return.findUnique.mockResolvedValue(fakeReturn({ id: 'ret_c1' }));
+    prisma.shop.findUnique.mockRejectedValue(new Error('db hiccup'));
+    prisma.returnEvent.create.mockResolvedValue({});
+    loadHandler('onReturnCreated');
+
+    eventBus.emit(RETURN_CREATED, { returnId: 'ret_c1', shopId: 'shop_test_1' });
+    await flush();
+
+    expect(notification.sendReturnConfirmation).toHaveBeenCalledTimes(1);
+    expect(notification.sendNewReturnAlert).not.toHaveBeenCalled();
+    expect(unhandled).toHaveLength(0);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Merchant alert'), expect.any(Error));
   });
 
   it('still logs the event but does not email when the return cannot be found', async () => {

@@ -14,7 +14,7 @@ This guide walks through everything from first install to your first refund, in 
 
 | Step | What it does | Where |
 |---|---|---|
-| Connect a carrier | Lets the app create real return labels | Dashboard → Setup Guide, or Settings |
+| Return labels | Evri labels are included through ReturnFlow (managed labels, on by default); you can connect your own Royal Mail account instead | Dashboard → Setup Guide, or Settings |
 | Set your return address | Where customers post parcels back to | Settings → Return Warehouse Address |
 | Customise your portal | Heading, brand colour, support email on the customer portal | Settings → Portal Branding |
 | Share your returns portal | Your portal link to put in emails / your site | Dashboard → Setup Guide |

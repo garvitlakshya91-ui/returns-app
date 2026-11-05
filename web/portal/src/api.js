@@ -51,7 +51,12 @@ export function uploadPhotos(returnId, files, email, itemId) {
   return fetch(`${API_BASE}/returns/${returnId}/photos`, {
     method: 'POST',
     body: formData,
-  }).then((res) => res.json());
+  }).then(async (res) => {
+    const body = await res.json().catch(() => ({}));
+    // A refused upload (wrong type, too big) must not look like success.
+    if (!res.ok) throw new Error(body.error || `Upload failed (${res.status})`);
+    return body;
+  });
 }
 
 export function getDropoffLocations(shopId, carrier, postcode) {

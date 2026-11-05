@@ -24,6 +24,7 @@ const TEMPLATES = {
   RefundProcessed: () => require(path.join(EMAILS_DIR, 'RefundProcessed.jsx')),
   ReturnRejected:  () => require(path.join(EMAILS_DIR, 'ReturnRejected.jsx')),
   ReturnReceived:  () => require(path.join(EMAILS_DIR, 'ReturnReceived.jsx')),
+  NewReturnRequest: () => require(path.join(EMAILS_DIR, 'NewReturnRequest.jsx')),
 };
 
 async function renderTemplate(name, data) {

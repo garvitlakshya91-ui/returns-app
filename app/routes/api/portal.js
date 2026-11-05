@@ -14,14 +14,46 @@ const logger = require('../../utils/logger');
 const router = Router();
 router.use(portalLimiter);
 
+// Photo types we store. The portal's file picker offers the same list, and
+// anything else is answered with a 400 naming the file rather than dropped
+// on the floor with a 200 (the customer would think it uploaded).
+const PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+const PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+const PHOTO_MAX_FILES = 5;
+
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 5 }, // 5MB per file, max 5
+  limits: { fileSize: PHOTO_MAX_BYTES, files: PHOTO_MAX_FILES },
   fileFilter: (req, file, cb) => {
-    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/heic'];
-    cb(null, allowed.includes(file.mimetype));
+    if (PHOTO_TYPES.includes(file.mimetype)) return cb(null, true);
+    req.rejectedPhotos = req.rejectedPhotos || [];
+    req.rejectedPhotos.push(file.originalname || file.mimetype);
+    cb(null, false);
   },
 });
+
+// multer's own refusals (too big, too many) surface as errors; turn them
+// into a plain 400 instead of a 500 from the default error handler.
+function acceptPhotos(req, res, next) {
+  upload.array('photos', PHOTO_MAX_FILES)(req, res, (err) => {
+    if (err) {
+      const message = err.code === 'LIMIT_FILE_SIZE'
+        ? 'Each photo must be 5MB or smaller.'
+        : err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE'
+          ? `You can upload up to ${PHOTO_MAX_FILES} photos at a time.`
+          : 'Upload failed';
+      return res.status(400).json({ error: message, code: err.code || 'UPLOAD_FAILED' });
+    }
+    if (req.rejectedPhotos?.length) {
+      return res.status(400).json({
+        error: `Unsupported file type: ${req.rejectedPhotos.join(', ')}. Photos must be JPEG, PNG, WebP or HEIC.`,
+        code: 'UNSUPPORTED_FILE_TYPE',
+        rejected: req.rejectedPhotos,
+      });
+    }
+    next();
+  });
+}
 
 // Shopify search syntax: wrap a user-supplied value in double quotes, escaping
 // any quotes/backslashes inside it, and strip a leading '#' from order numbers.
@@ -278,7 +310,7 @@ router.get('/returns/:id', async (req, res) => {
  * Proxy upload: backend accepts multipart, stores on R2.
  * Accept field: photos[] + itemId (form field)
  */
-router.post('/returns/:id/photos', upload.array('photos', 5), async (req, res) => {
+router.post('/returns/:id/photos', acceptPhotos, async (req, res) => {
   try {
     const { itemId } = req.body;
     const returnRecord = await loadCustomerReturn(req, res, req.body.email, { items: true });
@@ -315,8 +347,8 @@ router.post('/returns/:id/photos/presign', async (req, res) => {
   try {
     const { contentType, contentLength } = req.body;
 
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) {
-      return res.status(400).json({ error: 'Invalid content type' });
+    if (!PHOTO_TYPES.includes(contentType)) {
+      return res.status(400).json({ error: 'Unsupported file type. Photos must be JPEG, PNG, WebP or HEIC.', code: 'UNSUPPORTED_FILE_TYPE' });
     }
     if (!Number.isInteger(contentLength) || contentLength <= 0) {
       return res.status(400).json({ error: 'contentLength must be the file size in bytes' });

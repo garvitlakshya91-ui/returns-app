@@ -272,6 +272,12 @@ export default function ReturnDetailPage() {
   const needsLabel = ['APPROVED', 'LABEL_SENT'].includes(ret.status) && labelStatus !== 'created' && !labelInProgress && !approvedWithoutLabel;
   const labelAction = !ret.label ? 'Generate label' : labelStatus === 'saved' ? 'Finish label' : 'Retry label';
   const lastLabelFailure = (ret.events || []).find((e) => e.type === 'label.failed')?.data?.error;
+  // Most recent email outcome for the label: a failure only counts while no
+  // later send succeeded (events arrive newest first).
+  const labelEmailFailure = (() => {
+    const latest = (ret.events || []).find((e) => e.type === 'label.email_failed' || e.type === 'label.emailed');
+    return latest && latest.type === 'label.email_failed' ? latest : null;
+  })();
   const canProcess = ['RECEIVED', 'INSPECTING', 'APPROVED', 'LABEL_SENT', 'IN_TRANSIT'].includes(ret.status);
   // A return approved without a label has no tracking to do this for it:
   // the merchant marks it received when the customer's parcel turns up.
@@ -395,7 +401,7 @@ export default function ReturnDetailPage() {
                       )}
                     </BlockStack>
                     <Text variant="bodyMd" fontWeight="semibold">
-                      {'\u00A3'}{Number(item.unitPrice).toFixed(2)}
+                      {formatMoney(item.unitPrice, ret.currency)}
                     </Text>
                   </InlineStack>
                 </Box>
@@ -426,6 +432,17 @@ export default function ReturnDetailPage() {
                     </p>
                   </Banner>
                 )}
+                {/* The label was bought but the email to the customer did not go out */}
+                {ret.label.status === 'saved' && labelEmailFailure && (
+                  <Banner tone="warning" title="Label bought, but the email to the customer failed">
+                    <p>
+                      {labelEmailFailure.data?.to ? `Could not email ${labelEmailFailure.data.to}: ` : ''}
+                      {labelEmailFailure.data?.error || 'the email could not be sent'}.
+                      {' '}Use "Finish label" above to resend it. The label is not bought again.
+                    </p>
+                  </Banner>
+                )}
+
                 {!ret.label.trackingStatus && ret.label.status === 'created' && ['LABEL_SENT', 'IN_TRANSIT'].includes(ret.status) && (
                   <Text variant="bodySm" tone="subdued">
                     Parcel: no carrier scan yet. Tracking is checked every 30 minutes.

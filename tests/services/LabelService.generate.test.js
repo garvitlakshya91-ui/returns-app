@@ -803,7 +803,7 @@ describe('LabelService.generateLabel — the steps after a saved label are resum
     expect(eventTypes()).toEqual(['label.charge_due', 'label.charged', 'label.emailed']);
     expect(billing.reportLabelUsage).toHaveBeenCalledTimes(1);
     expect(billing.reportLabelUsage.mock.calls[0][1]).toEqual({ returnId: 'ret_lbl_1', quantity: 1 });
-    expect(notification.sendLabelReady).toHaveBeenCalledWith(record, expect.objectContaining({ id: 'lbl_saved' }));
+    expect(notification.sendLabelReady).toHaveBeenCalledWith(record, expect.objectContaining({ id: 'lbl_saved' }), { direct: true });
     expect(prisma.returnLabel.update).toHaveBeenCalledWith({ where: { id: 'lbl_saved' }, data: { status: 'created' } });
     expect(generated).toHaveBeenCalledWith({ returnId: 'ret_lbl_1', labelId: 'lbl_saved' });
     expect(label).toMatchObject({ id: 'lbl_saved', trackingCode: 'H55', status: 'created' });
@@ -901,6 +901,40 @@ describe('LabelService.generateLabel — the steps after a saved label are resum
     expect(prisma.returnLabel.update).toHaveBeenCalledWith({ where: { id: 'lbl_saved' }, data: { status: 'created' } });
     expect(label.status).toBe('created');
     expect(idem.release).toHaveBeenCalledWith('label-email:ret_lbl_1');
+  });
+
+  it('the label email is sent directly (not queued) so "emailed" in the ledger means it left', async () => {
+    primeReturn({ label: savedLabel() });
+    load();
+    await LabelService.generateLabel('ret_lbl_1');
+    expect(notification.sendLabelReady).toHaveBeenCalledWith(expect.anything(), expect.anything(), { direct: true });
+  });
+
+  it('a refused email is written to the ledger with the reason, the label stays "saved", and the retry resends without buying again', async () => {
+    notification.sendLabelReady.mockRejectedValue(new Error('Resend refused the email: invalid address'));
+    primeReturn({ label: savedLabel() }); // Evri BYO: no charge involved
+    load();
+
+    const label = await LabelService.generateLabel('ret_lbl_1');
+
+    expect(label.status).toBe('saved');
+    expect(eventTypes()).toEqual(['label.email_failed']);
+    expect(prisma.returnEvent.create).toHaveBeenCalledWith({
+      data: {
+        returnId: 'ret_lbl_1',
+        type: 'label.email_failed',
+        actor: 'system',
+        data: { to: 'jane@example.com', error: 'Resend refused the email: invalid address' },
+      },
+    });
+    expect(prisma.returnLabel.update).not.toHaveBeenCalled();
+
+    // Merchant clicks "Finish label" (or the sweep runs) after fixing the address.
+    notification.sendLabelReady.mockResolvedValue({ sent: true, id: 'msg' });
+    const done = await LabelService.generateLabel('ret_lbl_1');
+    expect(done.status).toBe('created');
+    expect(prisma.returnLabel.create).not.toHaveBeenCalled(); // no second label
+    expect(eventTypes()).toEqual(['label.email_failed', 'label.emailed']);
   });
 
   it('an email that does not go out keeps the label "saved" so the next attempt sends it, and nothing else is redone', async () => {

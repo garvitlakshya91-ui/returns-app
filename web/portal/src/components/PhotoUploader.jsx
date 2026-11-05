@@ -1,17 +1,29 @@
-import { useRef } from 'react';
-import { Camera, X, Upload } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Camera, X } from 'lucide-react';
+import { PHOTO_TYPES, PHOTO_MAX_BYTES, photoFileType as fileType } from '../photoTypes';
 
 export default function PhotoUploader({ photos = [], onChange, maxPhotos = 3 }) {
   const fileInputRef = useRef(null);
+  const [problem, setProblem] = useState('');
 
   function handleFileSelect(e) {
     const files = Array.from(e.target.files);
-    const newPhotos = files.slice(0, maxPhotos - photos.length).map((file) => ({
+    const rejected = [];
+    const accepted = [];
+    for (const file of files) {
+      if (!PHOTO_TYPES.includes(fileType(file))) rejected.push(`${file.name} isn't a JPEG, PNG, WebP or HEIC image`);
+      else if (file.size > PHOTO_MAX_BYTES) rejected.push(`${file.name} is over 5MB`);
+      else accepted.push(file);
+    }
+    const room = Math.max(0, maxPhotos - photos.length);
+    if (accepted.length > room) rejected.push(`Only ${maxPhotos} photos per item`);
+    const newPhotos = accepted.slice(0, room).map((file) => ({
       file,
       preview: URL.createObjectURL(file),
       name: file.name,
     }));
-    onChange([...photos, ...newPhotos]);
+    setProblem(rejected.join('. '));
+    if (newPhotos.length) onChange([...photos, ...newPhotos]);
     e.target.value = '';
   }
 
@@ -30,6 +42,7 @@ export default function PhotoUploader({ photos = [], onChange, maxPhotos = 3 }) 
               type="button"
               onClick={() => removePhoto(i)}
               className="absolute top-0.5 right-0.5 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center"
+              aria-label={`Remove ${photo.name}`}
             >
               <X className="w-3 h-3" />
             </button>
@@ -51,15 +64,19 @@ export default function PhotoUploader({ photos = [], onChange, maxPhotos = 3 }) 
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept={`${PHOTO_TYPES.join(',')},.heic,.heif`}
         multiple
         onChange={handleFileSelect}
         className="hidden"
       />
 
-      <p className="text-xs text-gray-400 mt-2">
-        {photos.length}/{maxPhotos} photos. Help us process your return faster.
-      </p>
+      {problem ? (
+        <p className="text-xs text-red-600 mt-2" role="alert">{problem}.</p>
+      ) : (
+        <p className="text-xs text-gray-400 mt-2">
+          {photos.length}/{maxPhotos} photos (JPEG, PNG, WebP or HEIC, up to 5MB). Help us process your return faster.
+        </p>
+      )}
     </div>
   );
 }

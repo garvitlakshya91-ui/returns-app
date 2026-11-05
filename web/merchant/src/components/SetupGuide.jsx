@@ -91,11 +91,13 @@ export default function SetupGuide() {
     },
     {
       key: 'carrier',
-      title: 'Connect a carrier',
-      description: 'Add your Evri, Royal Mail or InPost account so customers get real return labels.',
+      title: 'Return labels',
+      description: hasCarrier
+        ? 'Evri labels are included through ReturnFlow, no carrier account needed. Prefer your own Royal Mail account? Connect it in Settings.'
+        : 'Switch on managed Evri labels (included, no carrier account needed) or connect your own Royal Mail account in Settings.',
       done: hasCarrier,
       required: true,
-      action: { label: 'Connect carrier', onClick: () => navigate('/settings') },
+      action: { label: 'Label settings', onClick: () => navigate('/settings') },
     },
     {
       key: 'policy',

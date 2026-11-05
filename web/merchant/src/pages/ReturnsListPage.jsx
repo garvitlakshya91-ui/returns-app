@@ -16,6 +16,7 @@ import {
 import ReturnStatusBadge from '../components/ReturnStatusBadge';
 import AppFooter from '../components/AppFooter';
 import { returnsApi } from '../api';
+import { formatMoney } from '../money';
 
 const STATUS_OPTIONS = [
   { label: 'Requested', value: 'REQUESTED' },
@@ -153,7 +154,7 @@ export default function ReturnsListPage() {
       <IndexTable.Cell>
         {ret.items?.length || 0} item{(ret.items?.length || 0) !== 1 ? 's' : ''}
       </IndexTable.Cell>
-      <IndexTable.Cell>{'\u00A3'}{Number(ret.totalValue).toFixed(2)}</IndexTable.Cell>
+      <IndexTable.Cell>{formatMoney(ret.totalValue, ret.currency)}</IndexTable.Cell>
       <IndexTable.Cell>
         {new Date(ret.createdAt).toLocaleDateString('en-GB')}
       </IndexTable.Cell>

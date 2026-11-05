@@ -217,6 +217,7 @@ export default function SettingsPage() {
                 ]}
                 value={settings.merchantNotify || 'email'}
                 onChange={(v) => updateSetting('merchantNotify', v)}
+                helpText={`Each new return request is emailed to ${shopInfo.email || 'your store email'} with a link to review it.`}
               />
             </BlockStack>
           </Card>

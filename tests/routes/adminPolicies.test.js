@@ -175,6 +175,60 @@ describe('POST /api/admin/policies', () => {
   });
 });
 
+describe('resolutions must leave the customer a way to return', () => {
+  const noWay = { allowRefund: false, allowStoreCredit: false, allowExchange: false };
+  const exchangeOnly = { allowRefund: false, allowStoreCredit: false, allowExchange: true };
+
+  it('POST 400 when every resolution is switched off — nothing is created', async () => {
+    const res = await request(app).post('/api/admin/policies').send({ name: 'Dead end', resolutions: noWay });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/at least one resolution/i);
+    expect(prisma.returnPolicy.create).not.toHaveBeenCalled();
+  });
+
+  it('POST 400 for an exchange-only policy while exchanges are not available in this build', async () => {
+    const res = await request(app).post('/api/admin/policies').send({ name: 'Swap only', resolutions: exchangeOnly });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/exchanges are not available yet/i);
+    expect(prisma.returnPolicy.create).not.toHaveBeenCalled();
+  });
+
+  it('POST accepts an exchange-only policy once exchanges are enabled', async () => {
+    jest.resetModules();
+    prisma = installPrismaMock();
+    jest.doMock('../../app/config/features', () => ({ EXCHANGES_ENABLED: true }));
+    jest.doMock('../../app/middleware/auth', () => ({
+      verifyShopifySession: (req, res, next) => { req.shopId = 'shop_test_1'; next(); },
+    }));
+    const enabledApp = express();
+    enabledApp.use(express.json());
+    enabledApp.use('/api/admin/policies', require('../../app/routes/api/policies'));
+    prisma.returnPolicy.create.mockResolvedValue(fakePolicy({ resolutions: exchangeOnly }));
+
+    const res = await request(enabledApp).post('/api/admin/policies').send({ name: 'Swap only', resolutions: exchangeOnly });
+    expect(res.status).toBe(201);
+    expect(prisma.returnPolicy.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('PUT 400 when the update would switch every resolution off — nothing is updated', async () => {
+    const res = await request(app).put('/api/admin/policies/pol_1').send({ resolutions: noWay });
+    expect(res.status).toBe(400);
+    expect(prisma.returnPolicy.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('PUT 400 when resolutions is not an object', async () => {
+    const res = await request(app).put('/api/admin/policies/pol_1').send({ resolutions: 'refund' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('resolutions must be an object');
+  });
+
+  it('an update that leaves resolutions alone is not checked', async () => {
+    prisma.returnPolicy.updateMany.mockResolvedValue({ count: 1 });
+    const res = await request(app).put('/api/admin/policies/pol_1').send({ name: 'Renamed' });
+    expect(res.status).toBe(200);
+  });
+});
+
 describe('PUT /api/admin/policies/:id', () => {
   it('updates via updateMany scoped by id AND shopId', async () => {
     prisma.returnPolicy.updateMany.mockResolvedValue({ count: 1 });

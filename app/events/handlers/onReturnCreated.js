@@ -23,6 +23,18 @@ eventBus.on(RETURN_CREATED, async ({ returnId, shopId }) => {
     // Send confirmation email
     if (returnRecord) {
       await NotificationService.sendReturnConfirmation(returnRecord);
+
+      // And tell the merchant, unless they switched it off in Settings.
+      // Never let this stop the customer-facing side above.
+      try {
+        const shop = await prisma.shop.findUnique({
+          where: { id: returnRecord.shopId },
+          select: { email: true, name: true, settings: true, shopifyDomain: true, currency: true },
+        });
+        if (shop) await NotificationService.sendNewReturnAlert(shop, returnRecord);
+      } catch (err) {
+        console.error(`[Event] Merchant alert for ${returnId} failed:`, err);
+      }
     }
 
     console.log(`[Event] Return created: ${returnId} for shop ${shopId}`);

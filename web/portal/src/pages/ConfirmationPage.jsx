@@ -82,8 +82,8 @@ export default function ConfirmationPage({ data }) {
         const saved = (returnResult.items || []).find((ri) => ri.shopifyLineItemId === item.lineItemId);
         try {
           await uploadPhotos(returnResult.id, files, data.order?.email, saved?.id);
-        } catch {
-          failed.push(item.title);
+        } catch (err) {
+          failed.push(`${item.title}${err?.message ? ` (${err.message})` : ''}`);
         }
       }
       if (failed.length) setPhotoWarning(`Your return was submitted, but photos for ${failed.join(', ')} could not be uploaded.`);

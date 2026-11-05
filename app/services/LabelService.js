@@ -360,10 +360,15 @@ class LabelService {
           emailed = true;
         } else {
           const NotificationService = require('./NotificationService');
+          // Sent now, not queued: "emailed" below must mean it left. A
+          // queued job can still fail after this step has recorded success,
+          // and nothing would resend it.
           let sent = null;
+          let failure = null;
           try {
-            sent = await NotificationService.sendLabelReady(returnRecord, label);
+            sent = await NotificationService.sendLabelReady(returnRecord, label, { direct: true });
           } catch (err) {
+            failure = err.message;
             logger.warn({ returnId, err: err.message }, 'Label email failed');
           }
           if (sent) {
@@ -374,8 +379,17 @@ class LabelService {
           } else {
             // Stay 'saved': the next attempt (approve retry, merchant's
             // "Finish label", the recovery job) sends the email instead of
-            // skipping it.
-            logger.warn({ returnId }, 'Label email not sent; label kept as saved so it is sent on the next attempt');
+            // skipping it. The label is never bought again. The failure goes
+            // in the ledger so the merchant can see why and act on it.
+            logger.warn({ returnId, failure }, 'Label email not sent; label kept as saved so it is sent on the next attempt');
+            await prisma.returnEvent.create({
+              data: {
+                returnId,
+                type: 'label.email_failed',
+                actor: 'system',
+                data: { to: returnRecord.customerEmail, error: failure || 'The email could not be sent' },
+              },
+            }).catch((err) => logger.warn({ returnId, err: err.message }, 'Could not record label email failure'));
           }
         }
       } finally {

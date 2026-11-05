@@ -2,6 +2,7 @@ const { Router } = require('express');
 const { verifyShopifySession } = require('../../middleware/auth');
 const prisma = require('../../config/database');
 const logger = require('../../utils/logger');
+const { EXCHANGES_ENABLED } = require('../../config/features');
 
 const router = Router();
 router.use(verifyShopifySession);
@@ -29,7 +30,11 @@ router.get('/', async (req, res) => {
     ? `https://admin.shopify.com/store/${slug}/themes/current/editor?template=index&addAppBlockId=${extensionId}/start-return&target=newAppsSection`
     : '';
 
-  res.json({ ...shop, portalUrl, shopHandle: slug, themeEditorUrl });
+  // Which optional flows this build offers customers, so the dashboard can
+  // grey out policy switches that would do nothing.
+  const features = { exchanges: EXCHANGES_ENABLED };
+
+  res.json({ ...shop, portalUrl, shopHandle: slug, themeEditorUrl, features });
   } catch (err) {
     logger.error({ err }, 'Load settings error');
     res.status(500).json({ error: 'Failed to load settings' });

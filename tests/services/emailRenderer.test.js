@@ -18,7 +18,9 @@ const esbuild = require('esbuild');
 const { installResendMock } = require('../helpers');
 
 const EMAILS_DIR = path.resolve(__dirname, '..', '..', 'emails');
-const TEMPLATE_NAMES = ['ReturnConfirmed', 'ReturnApproved', 'LabelReady', 'RefundProcessed', 'ReturnRejected', 'ReturnReceived'];
+const TEMPLATE_NAMES = ['ReturnConfirmed', 'ReturnApproved', 'LabelReady', 'RefundProcessed', 'ReturnRejected', 'ReturnReceived', 'NewReturnRequest'];
+// Templates addressed to the customer (greeting, return id). NewReturnRequest goes to the merchant.
+const CUSTOMER_TEMPLATES = TEMPLATE_NAMES.filter((n) => n !== 'NewReturnRequest');
 
 const jsxCache = new Map();
 function loadJsx(file) {
@@ -74,7 +76,7 @@ describe('renderTemplate — unknown templates', () => {
 });
 
 describe('renderTemplate — every template', () => {
-  it.each(TEMPLATE_NAMES)('%s renders a full HTML document carrying the order name, return id and brand', async (name) => {
+  it.each(CUSTOMER_TEMPLATES)('%s renders a full HTML document carrying the order name, return id and brand', async (name) => {
     const html = await renderTemplate(name, {
       customerName: 'Jane', orderName: '#1001', returnId: 'ret_abc', carrier: 'evri', brand: BRAND,
     });
@@ -92,7 +94,7 @@ describe('renderTemplate — every template', () => {
 
   it.each(TEMPLATE_NAMES)('%s renders with no data at all (missing fields degrade gracefully)', async (name) => {
     const html = await renderTemplate(name, {});
-    expect(html).toContain('Hi there,');
+    if (CUSTOMER_TEMPLATES.includes(name)) expect(html).toContain('Hi there,');
     expect(html).toContain('ReturnFlow'); // default brand name in the header
     expect(html).toContain('Powered by ReturnFlow');
   });
@@ -257,6 +259,39 @@ describe('renderTemplate — ReturnRejected / ReturnApproved', () => {
     expect(t).toContain('Return approved');
     expect(t).toContain('has been approved');
     expect(t).toContain('shipping label by email shortly');
+  });
+});
+
+describe('renderTemplate — NewReturnRequest (merchant alert)', () => {
+  const data = {
+    shopName: 'Wildgrove & Co.', orderName: '#1042', customerName: 'Jane Doe', customerEmail: 'jane@example.com',
+    resolution: 'STORE_CREDIT', totalValue: 47.5, currency: 'GBP',
+    returnUrl: 'https://admin.shopify.com/store/wildgrove/apps/key/returns/ret_9',
+    items: [{ title: 'Wool jumper', variant: 'M / Navy', quantity: 2, reason: 'doesnt_fit', detail: 'too tight' }],
+  };
+
+  it('summarises who, what, why and the wanted resolution, with a Review button into the app', async () => {
+    const html = await renderTemplate('NewReturnRequest', data);
+    const t = text(html);
+    expect(t).toContain('New return request');
+    expect(t).toContain('Jane Doe has asked to return 2 items from Wildgrove &amp; Co. order #1042');
+    expect(t).toContain('It is waiting for your approval.');
+    expect(t).toContain('Customer: jane@example.com');
+    expect(t).toContain('Wants: Store credit');
+    expect(t).toContain('Value: GBP 47.50');
+    expect(t).toContain('Wool jumper — M / Navy');
+    expect(t).toContain('Qty 2 · Reason: doesnt_fit — &quot;too tight&quot;');
+    expect(html).toContain('href="https://admin.shopify.com/store/wildgrove/apps/key/returns/ret_9"');
+    expect(t).toContain('Review in ReturnFlow');
+    expect(t).toContain('Settings → Notifications');
+  });
+
+  it('falls back to plain instructions when there is no deep link', async () => {
+    const html = await renderTemplate('NewReturnRequest', { ...data, returnUrl: null, items: [], customerName: null });
+    const t = text(html);
+    expect(t).toContain('jane@example.com has asked to return');
+    expect(t).toContain('Open ReturnFlow in your Shopify admin');
+    expect(t).not.toContain('Review in ReturnFlow');
   });
 });
 

@@ -527,6 +527,47 @@ describe('POST /api/portal/returns/:id/photos', () => {
     });
   });
 
+  it('400 naming the file when a photo is not JPEG/PNG/WebP/HEIC — not a silent 200 with nothing stored', async () => {
+    prisma.return.findUnique.mockResolvedValue(fakeReturn({ items: [fakeReturnItem({ id: 'item_test_1' })] }));
+
+    const res = await request(app)
+      .post('/api/portal/returns/ret_test_1/photos')
+      .field('email', 'jane@example.com')
+      .field('itemId', 'item_test_1')
+      .attach('photos', PNG, { filename: 'a.png', contentType: 'image/png' })
+      .attach('photos', Buffer.from('GIF89a'), { filename: 'anim.gif', contentType: 'image/gif' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('UNSUPPORTED_FILE_TYPE');
+    expect(res.body.error).toContain('anim.gif');
+    expect(res.body.rejected).toEqual(['anim.gif']);
+    // The whole request is refused: nothing half-uploaded for the customer to wonder about.
+    expect(storage.uploadReturnPhoto).not.toHaveBeenCalled();
+    expect(prisma.returnItem.update).not.toHaveBeenCalled();
+  });
+
+  it('HEIC (iPhone) photos are accepted', async () => {
+    prisma.return.findUnique.mockResolvedValue(fakeReturn({ items: [fakeReturnItem({ id: 'item_test_1' })] }));
+    prisma.returnItem.update.mockResolvedValue({});
+    const res = await request(app)
+      .post('/api/portal/returns/ret_test_1/photos')
+      .field('email', 'jane@example.com')
+      .attach('photos', PNG, { filename: 'IMG_1.heic', contentType: 'image/heic' });
+    expect(res.status).toBe(200);
+    expect(storage.uploadReturnPhoto).toHaveBeenCalledWith(expect.any(Buffer), 'image/heic', 'ret_test_1');
+  });
+
+  it('400 (not 500) when a photo is over the size limit', async () => {
+    prisma.return.findUnique.mockResolvedValue(fakeReturn());
+    const res = await request(app)
+      .post('/api/portal/returns/ret_test_1/photos')
+      .field('email', 'jane@example.com')
+      .attach('photos', Buffer.alloc(5 * 1024 * 1024 + 1), { filename: 'huge.png', contentType: 'image/png' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('LIMIT_FILE_SIZE');
+    expect(storage.uploadReturnPhoto).not.toHaveBeenCalled();
+  });
+
   it('does not touch an item that belongs to a different return (itemId not in this return)', async () => {
     prisma.return.findUnique.mockResolvedValue(fakeReturn({ items: [fakeReturnItem({ id: 'item_test_1' })] }));
 
@@ -541,7 +582,7 @@ describe('POST /api/portal/returns/:id/photos', () => {
     expect(prisma.returnItem.update).not.toHaveBeenCalled();
   });
 
-  it('silently drops files with a disallowed mimetype (fileFilter) and uploads nothing', async () => {
+  it('refuses a non-image (PDF) with a 400 instead of a 200 that stored nothing', async () => {
     prisma.return.findUnique.mockResolvedValue(fakeReturn({ items: [fakeReturnItem()] }));
 
     const res = await request(app)
@@ -550,14 +591,11 @@ describe('POST /api/portal/returns/:id/photos', () => {
       .field('itemId', 'item_test_1')
       .attach('photos', Buffer.from('%PDF-1.4'), { filename: 'doc.pdf', contentType: 'application/pdf' });
 
-    expect(res.status).toBe(200);
-    expect(res.body.urls).toEqual([]);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('UNSUPPORTED_FILE_TYPE');
+    expect(res.body.rejected).toEqual(['doc.pdf']);
     expect(storage.uploadReturnPhoto).not.toHaveBeenCalled();
-    // As coded the item is still "updated" with an empty push — a no-op write.
-    expect(prisma.returnItem.update).toHaveBeenCalledWith({
-      where: { id: 'item_test_1' },
-      data: { photoUrls: { push: [] } },
-    });
+    expect(prisma.returnItem.update).not.toHaveBeenCalled();
   });
 
   it('accepts heic and webp', async () => {
@@ -612,7 +650,7 @@ describe('POST /api/portal/returns/:id/photos/presign', () => {
       .post('/api/portal/returns/ret_test_1/photos/presign')
       .send({ contentType: 'application/pdf', contentLength: 1000 });
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe('Invalid content type');
+    expect(res.body.error).toBe('Unsupported file type. Photos must be JPEG, PNG, WebP or HEIC.');
     expect(storage.getPresignedUploadUrl).not.toHaveBeenCalled();
   });
 

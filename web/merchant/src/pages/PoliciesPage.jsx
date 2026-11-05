@@ -17,7 +17,7 @@ import {
   SkeletonPage,
   SkeletonBodyText,
 } from '@shopify/polaris';
-import { policiesApi } from '../api';
+import { policiesApi, settingsApi } from '../api';
 import AppFooter from '../components/AppFooter';
 
 const EMPTY_FORM = {
@@ -48,8 +48,16 @@ export default function PoliciesPage() {
   const [saving, setSaving] = useState(false);
   const [banner, setBanner] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
+  // Exchanges exist as a policy switch but are only offered to customers
+  // when this build supports them; until then the switch is greyed out.
+  const [exchangesAvailable, setExchangesAvailable] = useState(false);
 
-  useEffect(() => { loadPolicies(); }, []);
+  useEffect(() => {
+    loadPolicies();
+    settingsApi.get()
+      .then((s) => setExchangesAvailable(Boolean(s?.features?.exchanges)))
+      .catch(() => setExchangesAvailable(false));
+  }, []);
 
   async function loadPolicies() {
     try {
@@ -95,6 +103,18 @@ export default function PoliciesPage() {
   }
 
   async function handleSave() {
+    // A policy with nothing a customer can choose is a dead end in the
+    // portal; the server refuses it too, but say so before the round trip.
+    const exchangeCounts = form.allowExchange && exchangesAvailable;
+    if (!form.allowRefund && !form.allowStoreCredit && !exchangeCounts) {
+      setBanner({
+        title: form.allowExchange
+          ? 'Exchanges are not available yet, so allow refunds or store credit as well.'
+          : 'Allow at least one resolution (refund or store credit).',
+        tone: 'critical',
+      });
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
@@ -260,7 +280,13 @@ export default function PoliciesPage() {
             <Text variant="headingSm" as="h3">Allowed resolutions</Text>
             <Checkbox label="Refund to original payment" checked={form.allowRefund} onChange={set('allowRefund')} />
             <Checkbox label="Store credit (Shopify store credit)" checked={form.allowStoreCredit} onChange={set('allowStoreCredit')} />
-            <Checkbox label="Exchange for another item" checked={form.allowExchange} onChange={set('allowExchange')} />
+            <Checkbox
+              label="Exchange for another item"
+              checked={form.allowExchange}
+              onChange={set('allowExchange')}
+              disabled={!exchangesAvailable}
+              helpText={exchangesAvailable ? undefined : 'Exchanges are coming soon. Customers are offered refunds and store credit for now.'}
+            />
 
             <Text variant="headingSm" as="h3">Return fees (store currency)</Text>
             <Text tone="subdued" variant="bodySm">Deducted from the refund (or added to an exchange). Faulty, damaged, wrong or misdescribed items are always free to return under UK law.</Text>

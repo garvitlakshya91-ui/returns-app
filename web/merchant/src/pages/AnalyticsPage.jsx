@@ -221,7 +221,7 @@ export default function AnalyticsPage() {
             <Banner
               tone="info"
               title="Unlock analytics with Growth"
-              action={{ content: 'Upgrade to Growth — £29/mo', onAction: handleUpgrade, loading: upgrading }}
+              action={{ content: 'Upgrade to Growth — $29/mo via Shopify', onAction: handleUpgrade, loading: upgrading }}
             >
               <p>See your real return rate, top returned products, reason breakdowns and revenue retained. The figures below are sample data.</p>
             </Banner>

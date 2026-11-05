@@ -58,6 +58,7 @@ describe('GET /api/admin/settings', () => {
       portalUrl: 'https://portal.test.local/portal/test-shop',
       shopHandle: 'test-shop',
       themeEditorUrl: '', // no THEME_EXTENSION_UUID configured → manual steps in the UI
+      features: { exchanges: false }, // off unless EXCHANGES_ENABLED=true
     });
   });
 
@@ -129,7 +130,7 @@ describe('GET /api/admin/settings', () => {
     prisma.shop.findUnique.mockResolvedValue(null);
     const res = await request(app).get('/api/admin/settings');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ portalUrl: '', shopHandle: '', themeEditorUrl: '' });
+    expect(res.body).toEqual({ portalUrl: '', shopHandle: '', themeEditorUrl: '', features: { exchanges: false } });
   });
 
   it('500 { error: "Failed to load settings" } when prisma throws', async () => {

@@ -31,7 +31,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, Math.round(ms * PACE)));
 const VIEWPORT = { width: 1600, height: 900 };
 
 // ── Mock merchant API, with the return moving through its states ──────────
-const state = { status: 'REQUESTED', label: null, refundAmount: null, events: [] };
+// planChosen / carriers model the setup steps a fresh install walks through
+// (Shopify's plan page, then "Turn on managed return labels").
+const state = { status: 'REQUESTED', label: null, refundAmount: null, events: [], planChosen: false, carriers: [] };
 const at = (m) => `2026-10-22T10:${String(m).padStart(2, '0')}:00Z`;
 state.events.push({ id: 'e1', type: 'return.created', actor: 'customer', createdAt: at(15) });
 
@@ -40,13 +42,15 @@ const LABEL = {
   labelUrl: 'https://example.com/label.pdf', qrCodeUrl: null, createdAt: at(17),
 };
 const ITEM = { id: 'i1', productTitle: 'Merino Wool Jumper', variantTitle: 'Medium / Forest Green', reason: 'doesnt_fit', reasonDetail: 'Slightly too tight on the shoulders.', quantity: 1, unitPrice: '68.00', photoUrls: [] };
+// A real Shopify order gid: without one the page treats the return as a
+// "test return" and hides Approve.
 const detail = () => ({
-  id: 'ret_1', shopifyOrderName: '#1042', customerName: 'Jamie Rivera', customerEmail: 'jamie@example.com',
+  id: 'ret_1', shopifyOrderId: 'gid://shopify/Order/1042', shopifyOrderName: '#1042', customerName: 'Jamie Rivera', customerEmail: 'jamie@example.com',
   status: state.status, resolution: 'REFUND', totalValue: '68.00', refundAmount: state.refundAmount, currency: 'GBP',
   createdAt: at(15), items: [ITEM], label: state.label, events: [...state.events].reverse(),
 });
 const RETURNS = () => [
-  { id: 'ret_1', shopifyOrderName: '#1042', customerName: 'Jamie Rivera', customerEmail: 'jamie@example.com', status: state.status, totalValue: '68.00', currency: 'GBP', createdAt: at(15), items: [{ id: 'i1' }] },
+  { id: 'ret_1', shopifyOrderId: 'gid://shopify/Order/1042', shopifyOrderName: '#1042', customerName: 'Jamie Rivera', customerEmail: 'jamie@example.com', status: state.status, totalValue: '68.00', currency: 'GBP', createdAt: at(15), items: [{ id: 'i1' }] },
   { id: 'ret_2', shopifyOrderName: '#1039', customerName: 'Priya Shah', customerEmail: 'priya@example.com', status: 'LABEL_SENT', totalValue: '124.00', currency: 'GBP', createdAt: '2026-10-21T16:40:00Z', items: [{ id: 'i2' }, { id: 'i3' }] },
   { id: 'ret_3', shopifyOrderName: '#1031', customerName: 'Tom Okafor', customerEmail: 'tom@example.com', status: 'PROCESSED', totalValue: '42.50', currency: 'GBP', createdAt: '2026-10-20T09:05:00Z', items: [{ id: 'i4' }] },
 ];
@@ -59,14 +63,16 @@ const SKUS = [
 ];
 const POLICIES = [{ id: 'pol_1', name: 'Standard Returns', windowDays: 30, isDefault: true, isActive: true, conditions: {}, resolutions: { allowRefund: true, allowStoreCredit: true, allowExchange: false }, fees: { changed_mind: 2.5 }, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z' }];
 const SETTINGS = {
-  name: 'Wildgrove & Co.', email: 'hello@wildgrove.co', plan: 'GROWTH', currency: 'GBP', shopifyDomain: 'wildgrove.myshopify.com',
+  name: 'Wildgrove & Co.', email: 'hello@wildgrove.co', plan: 'FREE', currency: 'GBP', shopifyDomain: 'wildgrove.myshopify.com',
   portalUrl: 'https://app.returnsflow.uk/portal/wildgrove',
   settings: {
     warehouseLine1: '188 Chester Road North', warehouseCity: 'Sutton Coldfield', warehousePostcode: 'B73 6SH',
-    setupGuideDismissed: true, welcomeDismissed: true, reviewPromptDismissed: true,
+    welcomeDismissed: true, reviewPromptDismissed: true,
   },
+  shopHandle: 'wildgrove',
+  themeEditorUrl: 'https://admin.shopify.com/store/wildgrove/themes/current/editor?template=index&addAppBlockId=545b64c0/start-return&target=newAppsSection',
 };
-const CARRIERS = [{ id: 'c1', carrier: 'shippo', isActive: true, hasCredentials: false, settings: {} }];
+const PLAN_URL = 'https://admin.shopify.com/store/wildgrove/charges/returns-app-garvit-20260613/pricing_plans';
 
 function mockAdmin(method, url) {
   const p = new URL(url).pathname.replace(/^\/api\/admin/, '');
@@ -92,8 +98,17 @@ function mockAdmin(method, url) {
   if (p === '/analytics/skus') return SKUS;
   if (p === '/policies') return POLICIES;
   if (p === '/settings') return SETTINGS;
-  if (p === '/carriers') return CARRIERS;
-  if (p.startsWith('/billing')) return { currentPlan: 'GROWTH', plans: [] };
+  if (method === 'POST' && p === '/carriers') {
+    state.carriers = [{ id: 'c1', carrier: 'shippo', isActive: true, hasCredentials: false, settings: {} }];
+    return state.carriers[0];
+  }
+  if (p === '/carriers') return state.carriers;
+  if (p === '/billing/labels') {
+    return state.planChosen
+      ? { allowed: true, devStore: false, reason: null, plan: 'Free', planUrl: PLAN_URL, message: null }
+      : { allowed: false, devStore: false, reason: 'no_active_plan', plan: null, planUrl: PLAN_URL, message: 'choose a plan on Shopify\'s plan page first (the Free plan is fine).' };
+  }
+  if (p.startsWith('/billing')) return { currentPlan: 'FREE', plans: [] };
   return {};
 }
 
@@ -190,11 +205,44 @@ for (const [step, text, hold] of portalSteps) {
   await sleep(hold);
 }
 
-// Part 2: the merchant
-await card(page, { title: 'For you, the merchant', subtitle: 'Approve, label and refund every return from one place', kicker: 'Part 2' }, 3500);
+// Part 2: setup (what a fresh install walks through — the reviewer's path)
+await card(page, { title: 'Set up in two minutes', subtitle: 'Choose a plan, turn on managed labels, set your returns address', kicker: 'Part 2' }, 3500);
+
+await page.goto(`${MERCHANT}/admin/`, { waitUntil: 'load' });
+await caption(page, 'After installing, the dashboard setup guide lists what to do. First: choose a plan.');
+await sleep(6000);
+await page.getByText('Choose a plan', { exact: true }).first().scrollIntoViewIfNeeded({ timeout: 2500 }).catch(() => {});
+await caption(page, '"Choose a plan" opens Shopify\'s plan page. The Free plan has no monthly fee; labels are billed per label on your Shopify invoice.');
+await sleep(7500);
+
+// The plan is picked on Shopify's own page; model its result and come back.
+state.planChosen = true;
+await page.goto(`${MERCHANT}/admin/`, { waitUntil: 'load' });
+await caption(page, 'Back in the app the step is ticked. Next, turn on managed return labels: no carrier account or API keys needed.');
+await sleep(5500);
+await page.getByText('Turn on managed return labels').first().scrollIntoViewIfNeeded({ timeout: 2500 }).catch(() => {});
+await sleep(1500);
+await clickByText(page, 'button', 'Enable');
+await sleep(1500);
+await caption(page, 'Done: real Evri labels are bought through ReturnFlow\'s carrier account the moment you approve a return.');
+await sleep(6000);
+
+await clickByText(page, 'text', 'Settings');
+await sleep(1200);
+await caption(page, 'In Settings, enter the returns address your labels are posted to. Approvals are held until this is set.');
+await sleep(2000);
+await page.getByText(/warehouse address/i).first().scrollIntoViewIfNeeded({ timeout: 2500 }).catch(() => {});
+await sleep(6000);
+await page.getByText('Let customers find your portal', { exact: true }).first().scrollIntoViewIfNeeded({ timeout: 2500 }).catch(() => {});
+await caption(page, 'Then put the portal where customers look: a "Start a return" button in your theme, or a link in your order emails.');
+await sleep(7500);
+
+// Part 3: the merchant
+await card(page, { title: 'For you, the merchant', subtitle: 'Approve, label and refund every return from one place', kicker: 'Part 3' }, 3500);
 
 await page.goto(`${MERCHANT}/admin/`, { waitUntil: 'load' });
 await caption(page, 'Your dashboard shows new returns waiting for review, returns in progress and their value.');
+await page.getByText('Recent Returns', { exact: true }).first().scrollIntoViewIfNeeded({ timeout: 2500 }).catch(() => {});
 await sleep(6500);
 
 await clickByText(page, 'button', '#1042');
@@ -224,14 +272,6 @@ await clickByText(page, 'text', 'Policies');
 await sleep(1200);
 await caption(page, 'Return policies set the return window, the refund options, and optional fees by reason.');
 await sleep(6500);
-
-await clickByText(page, 'text', 'Settings');
-await sleep(1200);
-await caption(page, 'Settings: turn on managed labels, brand your portal, and set the returns address your labels go to.');
-await sleep(4000);
-// Bring the returns (warehouse) address into view: reviewers must set it first.
-await page.getByText(/warehouse address/i).first().scrollIntoViewIfNeeded({ timeout: 2500 }).catch(() => {});
-await sleep(4500);
 
 await clickByText(page, 'text', 'Analytics');
 await sleep(1200);

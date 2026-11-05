@@ -129,9 +129,11 @@ export default function SettingsPage() {
               <BlockStack gap="150">
                 <Text fontWeight="semibold">1. A "Start a return" button on your store</Text>
                 <Text tone="subdued">
-                  ReturnFlow adds a block to your theme editor. {shopInfo.themeEditorUrl
-                    ? 'Open the editor with the block ready to place, then drag it where you want it (the footer or your returns page work well) and save.'
-                    : 'Open Online Store → Themes → Customize, pick a page, click Add block → Apps → Start a return, place it (the footer or your returns page work well) and save.'}
+                  ReturnFlow adds a "Start a return" block to your theme editor. Open Online Store → Themes → Customize, pick a page,
+                  click Add section → Apps → Start a return, place it (the footer or your returns page work well) and save.
+                  {shopInfo.themeEditorUrl
+                    ? ' The shortcut below opens the editor with the block ready to place; if the editor says the block was not added, add it from the Apps list as above.'
+                    : ''}
                 </Text>
                 <InlineStack gap="200">
                   {shopInfo.themeEditorUrl ? (

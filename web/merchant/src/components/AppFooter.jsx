@@ -6,7 +6,7 @@ export default function AppFooter() {
   return (
     <FooterHelp>
       Questions or feedback? Email{' '}
-      <Link url="mailto:hello@cursus-ai.co.uk">hello@cursus-ai.co.uk</Link>
+      <Link url="mailto:lg@cursus-ai.co.uk">lg@cursus-ai.co.uk</Link>
     </FooterHelp>
   );
 }

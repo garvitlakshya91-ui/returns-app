@@ -90,6 +90,12 @@ app.use((req, res, next) => {
       ].join('; '),
     );
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    // The theme editor's preview is a sandboxed frame, and "Start a return"
+    // opens the portal in a new tab from it; a tab opened from a sandboxed
+    // frame inherits the sandbox, and such a tab must refuse any page whose
+    // opener policy is not unsafe-none (Chrome: "refused to connect",
+    // ERR_BLOCKED_BY_RESPONSE). The portal has no use for opener isolation.
+    res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
   }
   next();
 });

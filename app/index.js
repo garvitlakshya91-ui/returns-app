@@ -57,13 +57,16 @@ app.use(helmet({
 //    portal in a page of their own site, which is on whatever domain they
 //    own. So any HTTPS page may frame it. The portal keeps no session and
 //    nothing on it acts without the customer typing their own order
-//    details, so clickjacking has nothing to grab. script-src is locked to
-//    self; img-src to self, data:, and R2 (hosted QR / labels).
+//    details, so clickjacking has nothing to grab. No frame-ancestors
+//    directive at all: the editor preview's frames are built from inline
+//    HTML (about:srcdoc addresses), which no allow-list can name, not even
+//    "https:" or "*", and with one present Chrome showed
+//    ERR_BLOCKED_BY_RESPONSE ("refused to connect"). script-src is locked
+//    to self; img-src to self, data:, and R2 (hosted QR / labels).
 //    Cross-Origin-Resource-Policy must also allow it: a cross-origin
-//    isolated parent (the editor) refuses a nested frame whose response
-//    says same-origin, with the same ERR_BLOCKED_BY_RESPONSE.
+//    isolated parent refuses a nested frame whose response says
+//    same-origin, with the same error.
 const R2_PUBLIC = process.env.R2_PUBLIC_URL || '';
-const PORTAL_FRAME_ANCESTORS = "'self' https:";
 app.use((req, res, next) => {
   const shop = req.query.shop;
   if (shop && /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(String(shop))) {
@@ -82,7 +85,6 @@ app.use((req, res, next) => {
         `img-src ${imgSrc}`,
         "connect-src 'self'",
         "font-src 'self' data:",
-        `frame-ancestors ${PORTAL_FRAME_ANCESTORS}`,
         "base-uri 'self'",
         "form-action 'self'",
       ].join('; '),

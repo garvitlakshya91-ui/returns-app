@@ -50,22 +50,20 @@ app.use(helmet({
 // Per-request CSP:
 //  - /admin (Shopify embed): scope frame-ancestors to the requesting shop +
 //    admin.shopify.com so the embed works but no other origin can frame us.
-//  - /portal and everywhere else: only Shopify's own origins may frame the
-//    portal. The storefront "Start a return" block opens it in a new tab,
-//    but inside the theme editor the preview is a frame on admin.shopify.com
-//    (storefront frame within it), and clicks there stay in that frame; with
-//    framing denied outright the editor showed ERR_BLOCKED_BY_RESPONSE. No
-//    other origin can frame it, so clickjacking stays shut. script-src is
-//    locked to self; img-src to self, data:, and R2 (hosted QR / labels).
+//  - /portal and everywhere else: the portal is made to be opened from the
+//    merchant's storefront, and that includes being shown inside a frame:
+//    the theme editor's preview is a frame (the storefront frame sits
+//    inside admin.shopify.com's editor frame), and merchants embed the
+//    portal in a page of their own site, which is on whatever domain they
+//    own. So any HTTPS page may frame it. The portal keeps no session and
+//    nothing on it acts without the customer typing their own order
+//    details, so clickjacking has nothing to grab. script-src is locked to
+//    self; img-src to self, data:, and R2 (hosted QR / labels).
+//    Cross-Origin-Resource-Policy must also allow it: a cross-origin
+//    isolated parent (the editor) refuses a nested frame whose response
+//    says same-origin, with the same ERR_BLOCKED_BY_RESPONSE.
 const R2_PUBLIC = process.env.R2_PUBLIC_URL || '';
-const PORTAL_FRAME_ANCESTORS = [
-  "'self'",
-  'https://*.myshopify.com',
-  'https://admin.shopify.com',
-  'https://*.shopify.com',
-  'https://*.shopifypreview.com',
-  'https://*.shopifyapps.com',
-].join(' ');
+const PORTAL_FRAME_ANCESTORS = "'self' https:";
 app.use((req, res, next) => {
   const shop = req.query.shop;
   if (shop && /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(String(shop))) {
@@ -89,6 +87,7 @@ app.use((req, res, next) => {
         "form-action 'self'",
       ].join('; '),
     );
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
   }
   next();
 });

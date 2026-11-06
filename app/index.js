@@ -55,7 +55,7 @@ app.use(helmet({
 //    the theme editor's preview is a frame (the storefront frame sits
 //    inside admin.shopify.com's editor frame), and merchants embed the
 //    portal in a page of their own site, which is on whatever domain they
-//    own. So any HTTPS page may frame it. The portal keeps no session and
+//    own. So any page may frame it. The portal keeps no session and
 //    nothing on it acts without the customer typing their own order
 //    details, so clickjacking has nothing to grab. No frame-ancestors
 //    directive at all: the editor preview's frames are built from inline

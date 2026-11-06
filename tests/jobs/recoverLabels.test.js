@@ -67,10 +67,12 @@ describe('recoverUnfinishedLabels — what it selects', () => {
 
     await job.recoverUnfinishedLabels({ now });
 
+    // Keyed by return, not row id: generateLabel may have swapped a crashed
+    // 'buying' row for a fresh one, and the backoff must land on that one.
     expect(prisma.returnLabel.update.mock.calls.map((c) => c[0])).toEqual([
-      { where: { id: 'fresh' }, data: { recoveryAttempts: 1, nextRecoveryAt: new Date('2026-10-18T10:30:00Z') } },
-      { where: { id: 'third' }, data: { recoveryAttempts: 3, nextRecoveryAt: new Date('2026-10-18T12:00:00Z') } },
-      { where: { id: 'old' }, data: { recoveryAttempts: 10, nextRecoveryAt: new Date('2026-10-19T10:00:00Z') } }, // capped at a day
+      { where: { returnId: 'ret_fresh' }, data: { recoveryAttempts: 1, nextRecoveryAt: new Date('2026-10-18T10:30:00Z') } },
+      { where: { returnId: 'ret_third' }, data: { recoveryAttempts: 3, nextRecoveryAt: new Date('2026-10-18T12:00:00Z') } },
+      { where: { returnId: 'ret_old' }, data: { recoveryAttempts: 10, nextRecoveryAt: new Date('2026-10-19T10:00:00Z') } }, // capped at a day
     ]);
     expect(job.backoffMs(0)).toBe(30 * 60 * 1000);
     expect(job.backoffMs(1)).toBe(60 * 60 * 1000);

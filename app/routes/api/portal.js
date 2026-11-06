@@ -39,9 +39,11 @@ function acceptPhotos(req, res, next) {
     if (err) {
       const message = err.code === 'LIMIT_FILE_SIZE'
         ? 'Each photo must be 5MB or smaller.'
-        : err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE'
+        : err.code === 'LIMIT_FILE_COUNT'
           ? `You can upload up to ${PHOTO_MAX_FILES} photos at a time.`
-          : 'Upload failed';
+          : err.code === 'LIMIT_UNEXPECTED_FILE'
+            ? `Send up to ${PHOTO_MAX_FILES} photos in the "photos" field.`
+            : 'Upload failed';
       return res.status(400).json({ error: message, code: err.code || 'UPLOAD_FAILED' });
     }
     if (req.rejectedPhotos?.length) {

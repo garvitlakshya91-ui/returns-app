@@ -106,12 +106,17 @@ async function recoverUnfinishedLabels({ now = new Date() } = {}) {
   }
 }
 
-/** Push a label that did not finish back by its backoff; never throws. */
+/**
+ * Push a label that did not finish back by its backoff; never throws.
+ * Keyed by the return, not the row id: generateLabel may have replaced a
+ * crashed 'buying' row with a fresh one (one label row per return), and the
+ * backoff must land on whichever row the return has now.
+ */
 async function scheduleRetry(label, now) {
   const attempts = Number(label.recoveryAttempts) || 0;
   try {
     await prisma.returnLabel.update({
-      where: { id: label.id },
+      where: { returnId: label.returnId },
       data: { recoveryAttempts: attempts + 1, nextRecoveryAt: new Date(now.getTime() + backoffMs(attempts)) },
     });
   } catch (err) {
